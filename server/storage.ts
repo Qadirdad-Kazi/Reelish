@@ -1,460 +1,742 @@
 import { 
-  users, videos, comments, likes, follows,
+  users, videos, comments, likes, follows, videoViews, conversations, messages, 
+  notifications, tags, videoTags, trendingHashtags, passwordResetTokens,
   type User, type Video, type Comment, type Like, type Follow,
   type InsertUser, type InsertVideo, type InsertComment, type InsertLike, type InsertFollow,
-  type VideoWithUser, type CommentWithUser
+  type VideoWithUser, type CommentWithUser, type UserWithStats, type InsertVideoView,
+  type InsertMessage, type InsertNotification, type Tag, type VideoView
 } from "@shared/schema";
+import { db } from "./db";
+import { eq, desc, asc, like, and, or, sql, count, inArray } from "drizzle-orm";
+import { nanoid } from "nanoid";
+import bcrypt from "bcryptjs";
 
 export interface IStorage {
-  // Users
-  getUser(id: number): Promise<User | undefined>;
-  getUserByUsername(username: string): Promise<User | undefined>;
-  getUserByEmail(email: string): Promise<User | undefined>;
+  // Authentication
   createUser(user: InsertUser): Promise<User>;
-  updateUser(id: number, updates: Partial<User>): Promise<User | undefined>;
+  getUserByEmail(email: string): Promise<User | undefined>;
+  getUserByUsername(username: string): Promise<User | undefined>;
+  getUserById(id: string): Promise<User | undefined>;
+  updateUser(id: string, updates: Partial<User>): Promise<User | undefined>;
+  verifyPassword(email: string, password: string): Promise<User | null>;
+  
+  // Password reset
+  createPasswordResetToken(email: string): Promise<string>;
+  verifyPasswordResetToken(token: string): Promise<{ email: string; valid: boolean }>;
+  resetPassword(token: string, newPassword: string): Promise<boolean>;
   
   // Videos
   getVideo(id: number): Promise<Video | undefined>;
-  getVideoWithUser(id: number, currentUserId?: number): Promise<VideoWithUser | undefined>;
-  getVideosByUser(userId: number): Promise<Video[]>;
-  getFeedVideos(offset?: number, limit?: number, currentUserId?: number): Promise<VideoWithUser[]>;
+  getVideoWithUser(id: number, currentUserId?: string): Promise<VideoWithUser | undefined>;
+  getVideosByUser(userId: string, currentUserId?: string): Promise<VideoWithUser[]>;
+  getFeedVideos(offset?: number, limit?: number, currentUserId?: string): Promise<VideoWithUser[]>;
+  getTrendingVideos(offset?: number, limit?: number, currentUserId?: string): Promise<VideoWithUser[]>;
   createVideo(video: InsertVideo): Promise<Video>;
   updateVideo(id: number, updates: Partial<Video>): Promise<Video | undefined>;
-  deleteVideo(id: number): Promise<boolean>;
+  deleteVideo(id: number, userId: string): Promise<boolean>;
+  recordVideoView(view: InsertVideoView): Promise<void>;
   
   // Comments
   getComment(id: number): Promise<Comment | undefined>;
-  getVideoComments(videoId: number, currentUserId?: number): Promise<CommentWithUser[]>;
+  getVideoComments(videoId: number, currentUserId?: string): Promise<CommentWithUser[]>;
   createComment(comment: InsertComment): Promise<Comment>;
-  deleteComment(id: number): Promise<boolean>;
+  deleteComment(id: number, userId: string): Promise<boolean>;
   
   // Likes
   createLike(like: InsertLike): Promise<Like>;
-  deleteLike(userId: number, videoId?: number, commentId?: number): Promise<boolean>;
-  isVideoLiked(userId: number, videoId: number): Promise<boolean>;
-  isCommentLiked(userId: number, commentId: number): Promise<boolean>;
+  deleteLike(userId: string, videoId?: number, commentId?: number): Promise<boolean>;
+  isVideoLiked(userId: string, videoId: number): Promise<boolean>;
+  isCommentLiked(userId: string, commentId: number): Promise<boolean>;
   
   // Follows
   createFollow(follow: InsertFollow): Promise<Follow>;
-  deleteFollow(followerId: number, followingId: number): Promise<boolean>;
-  isFollowing(followerId: number, followingId: number): Promise<boolean>;
+  deleteFollow(followerId: string, followingId: string): Promise<boolean>;
+  isFollowing(followerId: string, followingId: string): Promise<boolean>;
+  getFollowers(userId: string, offset?: number, limit?: number): Promise<UserWithStats[]>;
+  getFollowing(userId: string, offset?: number, limit?: number): Promise<UserWithStats[]>;
   
   // Search
-  searchUsers(query: string): Promise<User[]>;
-  searchVideos(query: string): Promise<VideoWithUser[]>;
+  searchUsers(query: string, currentUserId?: string): Promise<UserWithStats[]>;
+  searchVideos(query: string, currentUserId?: string): Promise<VideoWithUser[]>;
+  searchHashtags(query: string): Promise<Tag[]>;
+  getTrendingHashtags(limit?: number): Promise<Tag[]>;
+  
+  // Tags
+  createTag(name: string): Promise<Tag>;
+  getOrCreateTags(names: string[]): Promise<Tag[]>;
+  addTagsToVideo(videoId: number, tagIds: number[]): Promise<void>;
+  
+  // Messaging
+  getConversations(userId: string): Promise<any[]>;
+  createMessage(message: InsertMessage): Promise<any>;
+  getConversationMessages(conversationId: number, offset?: number, limit?: number): Promise<any[]>;
+  
+  // Notifications
+  createNotification(notification: InsertNotification): Promise<any>;
+  getUserNotifications(userId: string, offset?: number, limit?: number): Promise<any[]>;
+  markNotificationAsRead(notificationId: number, userId: string): Promise<boolean>;
 }
 
-export class MemStorage implements IStorage {
-  // @ts-ignore
-  private users: Map<number, User> = new Map();
-  private videos: Map<number, Video> = new Map();
-  private comments: Map<number, Comment> = new Map();
-  private likes: Map<number, Like> = new Map();
-  private follows: Map<number, Follow> = new Map();
-  
-  private currentUserId = 1;
-  private currentVideoId = 1;
-  private currentCommentId = 1;
-  private currentLikeId = 1;
-  private currentFollowId = 1;
-
-  constructor() {
-    // Create some initial users
-    this.createUser({
-      username: "dancequeen_maya",
-      email: "maya@example.com",
-      password: "password123",
-      avatar: "https://pixabay.com/get/g9900e4683f4a6aba91611dfe3bf863ffdcdbbfd53bc37a65ecc8ad7f2b395ae20e7814ba82afa8a5ffaf66fe78cc63cbeefd82982898d9fae8513d2b6c3ca404_1280.jpg",
-      bio: "Professional dancer and choreographer 💃✨"
-    });
-
-    this.createUser({
-      username: "artbyluke",
-      email: "luke@example.com", 
-      password: "password123",
-      avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?ixlib=rb-4.0.3&auto=format&fit=crop&w=50&h=50",
-      bio: "Creating art that speaks to the soul 🎨"
-    });
-
-    this.createUser({
-      username: "chefemily",
-      email: "emily@example.com",
-      password: "password123", 
-      avatar: "https://images.unsplash.com/photo-1438761681033-6461ffad8d80?ixlib=rb-4.0.3&auto=format&fit=crop&w=50&h=50",
-      bio: "Sharing quick and delicious recipes 🍝👩‍🍳"
-    });
-
-    this.createUser({
-      username: "fitnessjake",
-      email: "jake@example.com",
-      password: "password123",
-      avatar: "https://images.unsplash.com/photo-1571019613454-1cb2f99b2d8b?ixlib=rb-4.0.3&auto=format&fit=crop&w=50&h=50",
-      bio: "Your daily fitness motivation 💪🔥"
-    });
-
-    // Create some initial videos
-    this.createVideo({
-      userId: 1,
-      title: "New Dance Choreography",
-      description: "New choreo to my favorite song! 💃 What do you think? #dance #choreography #viral",
-      videoUrl: "https://images.unsplash.com/photo-1547036967-23d11aacaee0?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&h=800",
-      thumbnailUrl: "https://images.unsplash.com/photo-1547036967-23d11aacaee0?ixlib=rb-4.0.3&auto=format&fit=crop&w=300&h=400",
-      duration: 30,
-      musicName: "Original sound - dancequeen_maya",
-      hashtags: ["dance", "choreography", "viral"]
-    } as any);
-
-    this.createVideo({
-      userId: 2,
-      title: "Art Creation Process",
-      description: "Creating magic with colors 🎨 Process video coming soon! #art #painting #creative #process",
-      videoUrl: "https://images.unsplash.com/photo-1578662996442-48f60103fc96?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&h=800",
-      thumbnailUrl: "https://images.unsplash.com/photo-1578662996442-48f60103fc96?ixlib=rb-4.0.3&auto=format&fit=crop&w=300&h=400",
-      duration: 45,
-      musicName: "Chill beats for creative minds",
-      hashtags: ["art", "painting", "creative", "process"]
-    } as any);
-
-    this.createVideo({
-      userId: 3,
-      title: "Quick Pasta Recipe",
-      description: "60-second pasta recipe that will change your life! 🍝 #cooking #recipe #pasta #quick",
-      videoUrl: "https://images.unsplash.com/photo-1556909114-f6e7ad7d3136?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&h=800",
-      thumbnailUrl: "https://images.unsplash.com/photo-1556909114-f6e7ad7d3136?ixlib=rb-4.0.3&auto=format&fit=crop&w=300&h=400",
-      duration: 60,
-      musicName: "Italian cooking vibes",
-      hashtags: ["cooking", "recipe", "pasta", "quick"]
-    } as any);
-
-    this.createVideo({
-      userId: 4,
-      title: "Morning Workout",
-      description: "5-minute morning workout to start your day right! 💪 #fitness #workout #morning #health",
-      videoUrl: "https://images.unsplash.com/photo-1571019613454-1cb2f99b2d8b?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&h=800",
-      thumbnailUrl: "https://images.unsplash.com/photo-1571019613454-1cb2f99b2d8b?ixlib=rb-4.0.3&auto=format&fit=crop&w=300&h=400",
-      duration: 300,
-      musicName: "High energy workout mix",
-      hashtags: ["fitness", "workout", "morning", "health"]
-    } as any);
-  }
-
-  async getUser(id: number): Promise<User | undefined> {
-    return this.users.get(id);
-  }
-
-  async getUserByUsername(username: string): Promise<User | undefined> {
-    return Array.from(this.users.values()).find(user => user.username === username);
-  }
-
-  async getUserByEmail(email: string): Promise<User | undefined> {
-    return Array.from(this.users.values()).find(user => user.email === email);
-  }
-
+export class DatabaseStorage implements IStorage {
+  // Authentication
   async createUser(insertUser: InsertUser): Promise<User> {
-    const id = this.currentUserId++;
-    const user: User = {
-      ...insertUser,
-      id,
-      followersCount: 0,
-      followingCount: 0,
-      verified: false,
-    };
-    this.users.set(id, user);
+    const id = nanoid();
+    const hashedPassword = insertUser.password ? await bcrypt.hash(insertUser.password, 12) : undefined;
+    
+    const [user] = await db
+      .insert(users)
+      .values({
+        ...insertUser,
+        id,
+        password: hashedPassword,
+      })
+      .returning();
+    
     return user;
   }
 
-  async updateUser(id: number, updates: Partial<User>): Promise<User | undefined> {
-    const user = this.users.get(id);
-    if (!user) return undefined;
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(eq(users.email, email))
+      .limit(1);
     
-    const updatedUser = { ...user, ...updates };
-    this.users.set(id, updatedUser);
-    return updatedUser;
+    return user;
   }
 
+  async getUserByUsername(username: string): Promise<User | undefined> {
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(eq(users.username, username))
+      .limit(1);
+    
+    return user;
+  }
+
+  async getUserById(id: string): Promise<User | undefined> {
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(eq(users.id, id))
+      .limit(1);
+    
+    return user;
+  }
+
+  async updateUser(id: string, updates: Partial<User>): Promise<User | undefined> {
+    const [user] = await db
+      .update(users)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(users.id, id))
+      .returning();
+    
+    return user;
+  }
+
+  async verifyPassword(email: string, password: string): Promise<User | null> {
+    const user = await this.getUserByEmail(email);
+    if (!user || !user.password) return null;
+    
+    const isValid = await bcrypt.compare(password, user.password);
+    return isValid ? user : null;
+  }
+
+  // Password reset
+  async createPasswordResetToken(email: string): Promise<string> {
+    const token = nanoid(32);
+    const expiresAt = new Date(Date.now() + 3600000); // 1 hour
+    
+    await db.insert(passwordResetTokens).values({
+      email,
+      token,
+      expiresAt,
+    });
+    
+    return token;
+  }
+
+  async verifyPasswordResetToken(token: string): Promise<{ email: string; valid: boolean }> {
+    const [resetToken] = await db
+      .select()
+      .from(passwordResetTokens)
+      .where(and(
+        eq(passwordResetTokens.token, token),
+        eq(passwordResetTokens.used, false)
+      ))
+      .limit(1);
+    
+    if (!resetToken || resetToken.expiresAt < new Date()) {
+      return { email: '', valid: false };
+    }
+    
+    return { email: resetToken.email, valid: true };
+  }
+
+  async resetPassword(token: string, newPassword: string): Promise<boolean> {
+    const verification = await this.verifyPasswordResetToken(token);
+    if (!verification.valid) return false;
+    
+    const hashedPassword = await bcrypt.hash(newPassword, 12);
+    
+    // Update password
+    await db
+      .update(users)
+      .set({ password: hashedPassword, updatedAt: new Date() })
+      .where(eq(users.email, verification.email));
+    
+    // Mark token as used
+    await db
+      .update(passwordResetTokens)
+      .set({ used: true })
+      .where(eq(passwordResetTokens.token, token));
+    
+    return true;
+  }
+
+  // Videos
   async getVideo(id: number): Promise<Video | undefined> {
-    return this.videos.get(id);
+    const [video] = await db
+      .select()
+      .from(videos)
+      .where(eq(videos.id, id))
+      .limit(1);
+    
+    return video;
   }
 
-  async getVideoWithUser(id: number, currentUserId?: number): Promise<VideoWithUser | undefined> {
-    const video = this.videos.get(id);
-    if (!video) return undefined;
+  async getVideoWithUser(id: number, currentUserId?: string): Promise<VideoWithUser | undefined> {
+    const [result] = await db
+      .select()
+      .from(videos)
+      .innerJoin(users, eq(videos.userId, users.id))
+      .where(eq(videos.id, id))
+      .limit(1);
     
-    const user = await this.getUser(video.userId);
-    if (!user) return undefined;
-
-    const isLiked = currentUserId ? await this.isVideoLiked(currentUserId, video.id) : false;
-    const isFollowing = currentUserId ? await this.isFollowing(currentUserId, user.id) : false;
-
+    if (!result) return undefined;
+    
+    const isLiked = currentUserId ? await this.isVideoLiked(currentUserId, id) : false;
+    const isFollowing = currentUserId ? await this.isFollowing(currentUserId, result.users.id) : false;
+    
     return {
-      ...video,
-      user,
+      ...result.videos,
+      user: result.users,
       isLiked,
       isFollowing,
     };
   }
 
-  async getVideosByUser(userId: number): Promise<Video[]> {
-    return Array.from(this.videos.values()).filter(video => video.userId === userId);
+  async getVideosByUser(userId: string, currentUserId?: string): Promise<VideoWithUser[]> {
+    const results = await db
+      .select()
+      .from(videos)
+      .innerJoin(users, eq(videos.userId, users.id))
+      .where(eq(videos.userId, userId))
+      .orderBy(desc(videos.createdAt));
+    
+    return Promise.all(results.map(async (result) => {
+      const isLiked = currentUserId ? await this.isVideoLiked(currentUserId, result.videos.id) : false;
+      const isFollowing = currentUserId ? await this.isFollowing(currentUserId, result.users.id) : false;
+      
+      return {
+        ...result.videos,
+        user: result.users,
+        isLiked,
+        isFollowing,
+      };
+    }));
   }
 
-  async getFeedVideos(offset = 0, limit = 10, currentUserId?: number): Promise<VideoWithUser[]> {
-    const allVideos = Array.from(this.videos.values())
-      .filter(video => !video.isPrivate)
-      .sort((a, b) => new Date(b.createdAt!).getTime() - new Date(a.createdAt!).getTime())
-      .slice(offset, offset + limit);
+  async getFeedVideos(offset = 0, limit = 10, currentUserId?: string): Promise<VideoWithUser[]> {
+    const results = await db
+      .select()
+      .from(videos)
+      .innerJoin(users, eq(videos.userId, users.id))
+      .where(eq(videos.isPrivate, false))
+      .orderBy(desc(videos.createdAt))
+      .offset(offset)
+      .limit(limit);
+    
+    return Promise.all(results.map(async (result) => {
+      const isLiked = currentUserId ? await this.isVideoLiked(currentUserId, result.videos.id) : false;
+      const isFollowing = currentUserId ? await this.isFollowing(currentUserId, result.users.id) : false;
+      
+      return {
+        ...result.videos,
+        user: result.users,
+        isLiked,
+        isFollowing,
+      };
+    }));
+  }
 
-    const videosWithUser: VideoWithUser[] = [];
+  async getTrendingVideos(offset = 0, limit = 10, currentUserId?: string): Promise<VideoWithUser[]> {
+    const results = await db
+      .select()
+      .from(videos)
+      .innerJoin(users, eq(videos.userId, users.id))
+      .where(eq(videos.isPrivate, false))
+      .orderBy(desc(videos.viewsCount), desc(videos.likesCount))
+      .offset(offset)
+      .limit(limit);
     
-    for (const video of allVideos) {
-      const user = await this.getUser(video.userId);
-      if (user) {
-        const isLiked = currentUserId ? await this.isVideoLiked(currentUserId, video.id) : false;
-        const isFollowing = currentUserId ? await this.isFollowing(currentUserId, user.id) : false;
-        
-        videosWithUser.push({
-          ...video,
-          user,
-          isLiked,
-          isFollowing,
-        });
-      }
-    }
-    
-    return videosWithUser;
+    return Promise.all(results.map(async (result) => {
+      const isLiked = currentUserId ? await this.isVideoLiked(currentUserId, result.videos.id) : false;
+      const isFollowing = currentUserId ? await this.isFollowing(currentUserId, result.users.id) : false;
+      
+      return {
+        ...result.videos,
+        user: result.users,
+        isLiked,
+        isFollowing,
+      };
+    }));
   }
 
   async createVideo(insertVideo: InsertVideo): Promise<Video> {
-    const id = this.currentVideoId++;
-    const video: Video = {
-      ...insertVideo,
-      id,
-      viewsCount: insertVideo.viewsCount || 0,
-      likesCount: insertVideo.likesCount || 0,
-      commentsCount: insertVideo.commentsCount || 0,
-      sharesCount: insertVideo.sharesCount || 0,
-      createdAt: new Date(),
-    };
-    this.videos.set(id, video);
+    const [video] = await db
+      .insert(videos)
+      .values(insertVideo)
+      .returning();
+    
+    // Update user's videos count
+    await db
+      .update(users)
+      .set({ 
+        videosCount: sql`${users.videosCount} + 1`,
+        updatedAt: new Date()
+      })
+      .where(eq(users.id, insertVideo.userId));
+    
     return video;
   }
 
   async updateVideo(id: number, updates: Partial<Video>): Promise<Video | undefined> {
-    const video = this.videos.get(id);
-    if (!video) return undefined;
+    const [video] = await db
+      .update(videos)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(videos.id, id))
+      .returning();
     
-    const updatedVideo = { ...video, ...updates };
-    this.videos.set(id, updatedVideo);
-    return updatedVideo;
+    return video;
   }
 
-  async deleteVideo(id: number): Promise<boolean> {
-    return this.videos.delete(id);
+  async deleteVideo(id: number, userId: string): Promise<boolean> {
+    const result = await db
+      .delete(videos)
+      .where(and(eq(videos.id, id), eq(videos.userId, userId)));
+    
+    if (result.rowCount && result.rowCount > 0) {
+      // Update user's videos count
+      await db
+        .update(users)
+        .set({ 
+          videosCount: sql`${users.videosCount} - 1`,
+          updatedAt: new Date()
+        })
+        .where(eq(users.id, userId));
+      
+      return true;
+    }
+    
+    return false;
   }
 
+  async recordVideoView(view: InsertVideoView): Promise<void> {
+    await db.insert(videoViews).values(view);
+    
+    // Update video view count
+    await db
+      .update(videos)
+      .set({ 
+        viewsCount: sql`${videos.viewsCount} + 1`,
+        updatedAt: new Date()
+      })
+      .where(eq(videos.id, view.videoId));
+  }
+
+  // Comments
   async getComment(id: number): Promise<Comment | undefined> {
-    return this.comments.get(id);
-  }
-
-  async getVideoComments(videoId: number, currentUserId?: number): Promise<CommentWithUser[]> {
-    const videoComments = Array.from(this.comments.values())
-      .filter(comment => comment.videoId === videoId)
-      .sort((a, b) => new Date(b.createdAt!).getTime() - new Date(a.createdAt!).getTime());
-
-    const commentsWithUser: CommentWithUser[] = [];
-    
-    for (const comment of videoComments) {
-      const user = await this.getUser(comment.userId);
-      if (user) {
-        const isLiked = currentUserId ? await this.isCommentLiked(currentUserId, comment.id) : false;
-        
-        commentsWithUser.push({
-          ...comment,
-          user,
-          isLiked,
-        });
-      }
-    }
-    
-    return commentsWithUser;
-  }
-
-  async createComment(insertComment: InsertComment): Promise<Comment> {
-    const id = this.currentCommentId++;
-    const comment: Comment = {
-      ...insertComment,
-      id,
-      likesCount: 0,
-      createdAt: new Date(),
-    };
-    this.comments.set(id, comment);
-    
-    // Update video comments count
-    const video = this.videos.get(insertComment.videoId);
-    if (video) {
-      await this.updateVideo(video.id, { commentsCount: video.commentsCount + 1 });
-    }
+    const [comment] = await db
+      .select()
+      .from(comments)
+      .where(eq(comments.id, id))
+      .limit(1);
     
     return comment;
   }
 
-  async deleteComment(id: number): Promise<boolean> {
-    const comment = this.comments.get(id);
-    if (!comment) return false;
+  async getVideoComments(videoId: number, currentUserId?: string): Promise<CommentWithUser[]> {
+    const results = await db
+      .select()
+      .from(comments)
+      .innerJoin(users, eq(comments.userId, users.id))
+      .where(eq(comments.videoId, videoId))
+      .orderBy(desc(comments.createdAt));
     
-    // Update video comments count
-    const video = this.videos.get(comment.videoId);
-    if (video) {
-      await this.updateVideo(video.id, { commentsCount: Math.max(0, video.commentsCount - 1) });
-    }
-    
-    return this.comments.delete(id);
+    return Promise.all(results.map(async (result) => {
+      const isLiked = currentUserId ? await this.isCommentLiked(currentUserId, result.comments.id) : false;
+      
+      return {
+        ...result.comments,
+        user: result.users,
+        isLiked,
+      };
+    }));
   }
 
-  async createLike(insertLike: InsertLike): Promise<Like> {
-    const id = this.currentLikeId++;
-    const like: Like = {
-      ...insertLike,
-      id,
-      createdAt: new Date(),
-    };
-    this.likes.set(id, like);
+  async createComment(insertComment: InsertComment): Promise<Comment> {
+    const [comment] = await db
+      .insert(comments)
+      .values(insertComment)
+      .returning();
     
-    // Update likes count
-    if (like.videoId) {
-      const video = this.videos.get(like.videoId);
-      if (video) {
-        await this.updateVideo(video.id, { likesCount: video.likesCount + 1 });
-      }
-    } else if (like.commentId) {
-      const comment = this.comments.get(like.commentId);
-      if (comment) {
-        const updatedComment = { ...comment, likesCount: comment.likesCount + 1 };
-        this.comments.set(comment.id, updatedComment);
-      }
+    // Update video comments count
+    await db
+      .update(videos)
+      .set({ 
+        commentsCount: sql`${videos.commentsCount} + 1`,
+        updatedAt: new Date()
+      })
+      .where(eq(videos.id, insertComment.videoId));
+    
+    return comment;
+  }
+
+  async deleteComment(id: number, userId: string): Promise<boolean> {
+    const comment = await this.getComment(id);
+    if (!comment || comment.userId !== userId) return false;
+    
+    const result = await db
+      .delete(comments)
+      .where(eq(comments.id, id));
+    
+    if (result.rowCount && result.rowCount > 0) {
+      // Update video comments count
+      await db
+        .update(videos)
+        .set({ 
+          commentsCount: sql`${videos.commentsCount} - 1`,
+          updatedAt: new Date()
+        })
+        .where(eq(videos.id, comment.videoId));
+      
+      return true;
+    }
+    
+    return false;
+  }
+
+  // Likes
+  async createLike(insertLike: InsertLike): Promise<Like> {
+    const [like] = await db
+      .insert(likes)
+      .values(insertLike)
+      .returning();
+    
+    // Update counts
+    if (insertLike.videoId) {
+      await db
+        .update(videos)
+        .set({ 
+          likesCount: sql`${videos.likesCount} + 1`,
+          updatedAt: new Date()
+        })
+        .where(eq(videos.id, insertLike.videoId));
+    } else if (insertLike.commentId) {
+      await db
+        .update(comments)
+        .set({ 
+          likesCount: sql`${comments.likesCount} + 1`,
+          updatedAt: new Date()
+        })
+        .where(eq(comments.id, insertLike.commentId));
     }
     
     return like;
   }
 
-  async deleteLike(userId: number, videoId?: number, commentId?: number): Promise<boolean> {
-    const like = Array.from(this.likes.values()).find(l => 
-      l.userId === userId && 
-      l.videoId === videoId && 
-      l.commentId === commentId
-    );
+  async deleteLike(userId: string, videoId?: number, commentId?: number): Promise<boolean> {
+    const conditions = [eq(likes.userId, userId)];
     
-    if (!like) return false;
-    
-    // Update likes count
-    if (like.videoId) {
-      const video = this.videos.get(like.videoId);
-      if (video) {
-        await this.updateVideo(video.id, { likesCount: Math.max(0, video.likesCount - 1) });
-      }
-    } else if (like.commentId) {
-      const comment = this.comments.get(like.commentId);
-      if (comment) {
-        const updatedComment = { ...comment, likesCount: Math.max(0, comment.likesCount - 1) };
-        this.comments.set(comment.id, updatedComment);
-      }
+    if (videoId) {
+      conditions.push(eq(likes.videoId, videoId));
+    }
+    if (commentId) {
+      conditions.push(eq(likes.commentId, commentId));
     }
     
-    return this.likes.delete(like.id);
+    const result = await db
+      .delete(likes)
+      .where(and(...conditions));
+    
+    if (result.rowCount && result.rowCount > 0) {
+      // Update counts
+      if (videoId) {
+        await db
+          .update(videos)
+          .set({ 
+            likesCount: sql`${videos.likesCount} - 1`,
+            updatedAt: new Date()
+          })
+          .where(eq(videos.id, videoId));
+      } else if (commentId) {
+        await db
+          .update(comments)
+          .set({ 
+            likesCount: sql`${comments.likesCount} - 1`,
+            updatedAt: new Date()
+          })
+          .where(eq(comments.id, commentId));
+      }
+      
+      return true;
+    }
+    
+    return false;
   }
 
-  async isVideoLiked(userId: number, videoId: number): Promise<boolean> {
-    return Array.from(this.likes.values()).some(like => 
-      like.userId === userId && like.videoId === videoId
-    );
+  async isVideoLiked(userId: string, videoId: number): Promise<boolean> {
+    const [like] = await db
+      .select()
+      .from(likes)
+      .where(and(eq(likes.userId, userId), eq(likes.videoId, videoId)))
+      .limit(1);
+    
+    return !!like;
   }
 
-  async isCommentLiked(userId: number, commentId: number): Promise<boolean> {
-    return Array.from(this.likes.values()).some(like => 
-      like.userId === userId && like.commentId === commentId
-    );
+  async isCommentLiked(userId: string, commentId: number): Promise<boolean> {
+    const [like] = await db
+      .select()
+      .from(likes)
+      .where(and(eq(likes.userId, userId), eq(likes.commentId, commentId)))
+      .limit(1);
+    
+    return !!like;
   }
 
+  // Follows
   async createFollow(insertFollow: InsertFollow): Promise<Follow> {
-    const id = this.currentFollowId++;
-    const follow: Follow = {
-      ...insertFollow,
-      id,
-      createdAt: new Date(),
-    };
-    this.follows.set(id, follow);
+    const [follow] = await db
+      .insert(follows)
+      .values(insertFollow)
+      .returning();
     
     // Update follow counts
-    const follower = this.users.get(insertFollow.followerId);
-    const following = this.users.get(insertFollow.followingId);
-    
-    if (follower) {
-      await this.updateUser(follower.id, { followingCount: follower.followingCount + 1 });
-    }
-    if (following) {
-      await this.updateUser(following.id, { followersCount: following.followersCount + 1 });
-    }
+    await Promise.all([
+      db
+        .update(users)
+        .set({ 
+          followingCount: sql`${users.followingCount} + 1`,
+          updatedAt: new Date()
+        })
+        .where(eq(users.id, insertFollow.followerId)),
+      
+      db
+        .update(users)
+        .set({ 
+          followersCount: sql`${users.followersCount} + 1`,
+          updatedAt: new Date()
+        })
+        .where(eq(users.id, insertFollow.followingId))
+    ]);
     
     return follow;
   }
 
-  async deleteFollow(followerId: number, followingId: number): Promise<boolean> {
-    const follow = Array.from(this.follows.values()).find(f => 
-      f.followerId === followerId && f.followingId === followingId
-    );
+  async deleteFollow(followerId: string, followingId: string): Promise<boolean> {
+    const result = await db
+      .delete(follows)
+      .where(and(eq(follows.followerId, followerId), eq(follows.followingId, followingId)));
     
-    if (!follow) return false;
-    
-    // Update follow counts
-    const follower = this.users.get(followerId);
-    const following = this.users.get(followingId);
-    
-    if (follower) {
-      await this.updateUser(follower.id, { followingCount: Math.max(0, follower.followingCount - 1) });
-    }
-    if (following) {
-      await this.updateUser(following.id, { followersCount: Math.max(0, following.followersCount - 1) });
-    }
-    
-    return this.follows.delete(follow.id);
-  }
-
-  async isFollowing(followerId: number, followingId: number): Promise<boolean> {
-    return Array.from(this.follows.values()).some(follow => 
-      follow.followerId === followerId && follow.followingId === followingId
-    );
-  }
-
-  async searchUsers(query: string): Promise<User[]> {
-    const lowercaseQuery = query.toLowerCase();
-    return Array.from(this.users.values()).filter(user => 
-      user.username.toLowerCase().includes(lowercaseQuery) ||
-      (user.bio && user.bio.toLowerCase().includes(lowercaseQuery))
-    );
-  }
-
-  async searchVideos(query: string): Promise<VideoWithUser[]> {
-    const lowercaseQuery = query.toLowerCase();
-    const matchingVideos = Array.from(this.videos.values()).filter(video => 
-      video.title.toLowerCase().includes(lowercaseQuery) ||
-      (video.description && video.description.toLowerCase().includes(lowercaseQuery)) ||
-      (video.hashtags && video.hashtags.some(tag => tag.toLowerCase().includes(lowercaseQuery)))
-    );
-
-    const videosWithUser: VideoWithUser[] = [];
-    
-    for (const video of matchingVideos) {
-      const user = await this.getUser(video.userId);
-      if (user) {
-        videosWithUser.push({
-          ...video,
-          user,
-        });
-      }
+    if (result.rowCount && result.rowCount > 0) {
+      // Update follow counts
+      await Promise.all([
+        db
+          .update(users)
+          .set({ 
+            followingCount: sql`${users.followingCount} - 1`,
+            updatedAt: new Date()
+          })
+          .where(eq(users.id, followerId)),
+        
+        db
+          .update(users)
+          .set({ 
+            followersCount: sql`${users.followersCount} - 1`,
+            updatedAt: new Date()
+          })
+          .where(eq(users.id, followingId))
+      ]);
+      
+      return true;
     }
     
-    return videosWithUser;
+    return false;
+  }
+
+  async isFollowing(followerId: string, followingId: string): Promise<boolean> {
+    const [follow] = await db
+      .select()
+      .from(follows)
+      .where(and(eq(follows.followerId, followerId), eq(follows.followingId, followingId)))
+      .limit(1);
+    
+    return !!follow;
+  }
+
+  async getFollowers(userId: string, offset = 0, limit = 20): Promise<UserWithStats[]> {
+    const results = await db
+      .select()
+      .from(follows)
+      .innerJoin(users, eq(follows.followerId, users.id))
+      .where(eq(follows.followingId, userId))
+      .offset(offset)
+      .limit(limit);
+    
+    return results.map(result => ({
+      ...result.users,
+      isFollowing: false, // Can be enhanced with current user context
+    }));
+  }
+
+  async getFollowing(userId: string, offset = 0, limit = 20): Promise<UserWithStats[]> {
+    const results = await db
+      .select()
+      .from(follows)
+      .innerJoin(users, eq(follows.followingId, users.id))
+      .where(eq(follows.followerId, userId))
+      .offset(offset)
+      .limit(limit);
+    
+    return results.map(result => ({
+      ...result.users,
+      isFollowing: true,
+    }));
+  }
+
+  // Search
+  async searchUsers(query: string, currentUserId?: string): Promise<UserWithStats[]> {
+    const results = await db
+      .select()
+      .from(users)
+      .where(or(
+        like(users.username, `%${query}%`),
+        like(users.firstName, `%${query}%`),
+        like(users.lastName, `%${query}%`)
+      ))
+      .limit(20);
+    
+    return Promise.all(results.map(async (user) => ({
+      ...user,
+      isFollowing: currentUserId ? await this.isFollowing(currentUserId, user.id) : false,
+    })));
+  }
+
+  async searchVideos(query: string, currentUserId?: string): Promise<VideoWithUser[]> {
+    const results = await db
+      .select()
+      .from(videos)
+      .innerJoin(users, eq(videos.userId, users.id))
+      .where(and(
+        eq(videos.isPrivate, false),
+        or(
+          like(videos.title, `%${query}%`),
+          like(videos.description, `%${query}%`)
+        )
+      ))
+      .limit(20);
+    
+    return Promise.all(results.map(async (result) => {
+      const isLiked = currentUserId ? await this.isVideoLiked(currentUserId, result.videos.id) : false;
+      const isFollowing = currentUserId ? await this.isFollowing(currentUserId, result.users.id) : false;
+      
+      return {
+        ...result.videos,
+        user: result.users,
+        isLiked,
+        isFollowing,
+      };
+    }));
+  }
+
+  async searchHashtags(query: string): Promise<Tag[]> {
+    return db
+      .select()
+      .from(tags)
+      .where(like(tags.name, `%${query}%`))
+      .orderBy(desc(tags.usageCount))
+      .limit(20);
+  }
+
+  async getTrendingHashtags(limit = 10): Promise<Tag[]> {
+    return db
+      .select()
+      .from(tags)
+      .where(eq(tags.trending, true))
+      .orderBy(desc(tags.usageCount))
+      .limit(limit);
+  }
+
+  // Tags
+  async createTag(name: string): Promise<Tag> {
+    const [tag] = await db
+      .insert(tags)
+      .values({ name })
+      .returning();
+    
+    return tag;
+  }
+
+  async getOrCreateTags(names: string[]): Promise<Tag[]> {
+    const existingTags = await db
+      .select()
+      .from(tags)
+      .where(inArray(tags.name, names));
+    
+    const existingNames = existingTags.map(tag => tag.name);
+    const newNames = names.filter(name => !existingNames.includes(name));
+    
+    const newTags = await Promise.all(
+      newNames.map(name => this.createTag(name))
+    );
+    
+    return [...existingTags, ...newTags];
+  }
+
+  async addTagsToVideo(videoId: number, tagIds: number[]): Promise<void> {
+    await db.insert(videoTags).values(
+      tagIds.map(tagId => ({ videoId, tagId }))
+    );
+  }
+
+  // Messaging (basic implementation)
+  async getConversations(userId: string): Promise<any[]> {
+    return [];
+  }
+
+  async createMessage(message: InsertMessage): Promise<any> {
+    return null;
+  }
+
+  async getConversationMessages(conversationId: number, offset = 0, limit = 50): Promise<any[]> {
+    return [];
+  }
+
+  // Notifications (basic implementation)
+  async createNotification(notification: InsertNotification): Promise<any> {
+    return null;
+  }
+
+  async getUserNotifications(userId: string, offset = 0, limit = 20): Promise<any[]> {
+    return [];
+  }
+
+  async markNotificationAsRead(notificationId: number, userId: string): Promise<boolean> {
+    return false;
   }
 }
 
-export const storage = new MemStorage();
+export const storage = new DatabaseStorage();
