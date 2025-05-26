@@ -8,6 +8,7 @@ import { storage } from "./storage";
 import { requireAuth, optionalAuth, loginSchema, registerSchema, forgotPasswordSchema, resetPasswordSchema } from "./auth";
 import { insertVideoSchema, insertCommentSchema, insertLikeSchema, insertFollowSchema } from "@shared/schema";
 import { z } from "zod";
+import "./types";
 
 // Configure session
 const sessionConfig = {
