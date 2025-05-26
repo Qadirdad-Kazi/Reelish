@@ -37,10 +37,10 @@ export default function Landing() {
         <div className="relative z-10 text-center max-w-4xl mx-auto px-6">
           <div className="mb-8">
             <h1 className="text-6xl md:text-8xl font-black mb-6 bg-gradient-to-r from-pink-500 via-purple-500 to-blue-500 bg-clip-text text-transparent">
-              TikTok
+              VibeShare
             </h1>
             <p className="text-xl md:text-2xl text-gray-300 mb-8 max-w-2xl mx-auto">
-              Make Your Day. Express yourself through videos and connect with a global community of creators.
+              Share Your Vibe. Create amazing videos, discover trending sounds, and connect with creators worldwide.
             </p>
           </div>
 
@@ -50,7 +50,7 @@ export default function Landing() {
               className="bg-pink-600 hover:bg-pink-700 text-white px-8 py-3 text-lg font-semibold rounded-full transition-all duration-300 transform hover:scale-105"
             >
               <Sparkles className="w-5 h-5 mr-2" />
-              Join TikTok
+              Join VibeShare
             </Button>
             <Button
               onClick={() => openAuth("login")}

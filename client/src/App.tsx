@@ -33,6 +33,9 @@ function Router() {
       <Route path="/" component={Home} />
       <Route path="/profile/:userId?" component={Profile} />
       <Route path="/discover" component={Discover} />
+      <Route path="/inbox" component={() => import("@/pages/inbox").then(m => m.default)} />
+      <Route path="/upload" component={() => import("@/pages/upload").then(m => m.default)} />
+      <Route path="/hashtag/:hashtag" component={() => import("@/pages/hashtag").then(m => m.default)} />
       <Route component={NotFound} />
     </Switch>
   );
