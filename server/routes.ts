@@ -9,7 +9,7 @@ import fs from "fs";
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { storage as dbStorage } from "./storage";
-import { requireAuth, optionalAuth, loginSchema, registerSchema, forgotPasswordSchema, resetPasswordSchema } from "./auth";
+import { requireAuth, optionalAuth, loginSchema, registerSchema, registerSchemaWithPasswordValidation, forgotPasswordSchema, resetPasswordSchema } from "./auth";
 
 // ES module equivalent of __dirname
 const __filename = fileURLToPath(import.meta.url);
@@ -89,47 +89,108 @@ export async function registerRoutes(app: Express): Promise<Server> {
     next();
   });
 
-  // Serve uploaded files
-  app.use('/uploads', express.static('uploads'));
+  // Serve uploaded files with proper MIME types and caching
+  app.use('/uploads', (req, res, next) => {
+    console.log('Static file request for:', req.path);
+    next();
+  }, express.static(path.join(__dirname, '../uploads'), {
+    setHeaders: (res, path) => {
+      // Set appropriate headers for video files
+      if (path.endsWith('.mp4')) {
+        res.setHeader('Content-Type', 'video/mp4');
+        // Allow browser to cache videos for 1 hour
+        res.setHeader('Cache-Control', 'public, max-age=3600');
+      }
+      console.log('Serving file:', path);
+    }
+  }));
+  
+  // Add a dedicated route for video streaming with proper error handling
+  app.get('/api/stream/:filename', (req, res) => {
+    const filename = req.params.filename;
+    const filePath = path.join(__dirname, '../uploads', filename);
+    
+    console.log('Video stream request for:', filename);
+    
+    // Check if file exists
+    fs.access(filePath, fs.constants.F_OK, (err) => {
+      if (err) {
+        console.error('Video file not found:', filePath);
+        return res.status(404).json({ message: 'Video not found' });
+      }
+      
+      // Get file stats (including size)
+      fs.stat(filePath, (err, stats) => {
+        if (err) {
+          console.error('Error accessing video file:', err);
+          return res.status(500).json({ message: 'Error accessing video' });
+        }
+        
+        // Handle range requests for video streaming
+        const range = req.headers.range;
+        if (range) {
+          const parts = range.replace(/bytes=/, '').split('-');
+          const start = parseInt(parts[0], 10);
+          const end = parts[1] ? parseInt(parts[1], 10) : stats.size - 1;
+          const chunksize = (end - start) + 1;
+          
+          console.log(`Serving video range: ${start}-${end}/${stats.size}`);
+          
+          const fileStream = fs.createReadStream(filePath, { start, end });
+          res.writeHead(206, {
+            'Content-Range': `bytes ${start}-${end}/${stats.size}`,
+            'Accept-Ranges': 'bytes',
+            'Content-Length': chunksize,
+            'Content-Type': 'video/mp4',
+          });
+          
+          fileStream.pipe(res);
+        } else {
+          // Serve the entire file
+          console.log(`Serving entire video file: ${stats.size} bytes`);
+          
+          res.writeHead(200, {
+            'Content-Length': stats.size,
+            'Content-Type': 'video/mp4',
+            'Accept-Ranges': 'bytes',
+          });
+          
+          fs.createReadStream(filePath).pipe(res);
+        }
+      });
+    });
+  });
 
   // Authentication Routes
   app.post('/api/auth/register', async (req, res) => {
     try {
-      console.log('Registration request received:', req.body);
-      // Ensure we have the correct type for validation
-      const userData = req.body as {
-        email: string;
-        username: string;
-        password: string;
-        confirmPassword: string;
-      };
+      console.log('Registration request received');
       
-      const validatedData = registerSchema.parse(userData);
-      console.log('Validation passed, validated data:', validatedData);
+      // First validate the basic schema
+      const validatedData = registerSchema.parse(req.body);
+      
+      // Then validate password matching
+      registerSchemaWithPasswordValidation.parse(validatedData);
+      
+      console.log('Validation passed for user:', validatedData.email);
       
       // Check if user already exists
-      if (validatedData.email && typeof validatedData.email === 'string') {
-        console.log('Checking if email exists:', validatedData.email);
-        const existingUser = await dbStorage.getUserByEmail(validatedData.email);
-        if (existingUser) {
-          console.log('Email already exists');
-          return res.status(400).json({ message: "An account with this email already exists" });
-        }
+      console.log('Checking if email exists:', validatedData.email);
+      const existingUser = await dbStorage.getUserByEmail(validatedData.email);
+      if (existingUser) {
+        console.log('Email already exists');
+        return res.status(400).json({ message: "An account with this email already exists" });
       }
 
       // Check username availability
-      if (validatedData.username && typeof validatedData.username === 'string') {
-        console.log('Checking if username exists:', validatedData.username);
-        const existingUsername = await dbStorage.getUserByUsername(validatedData.username);
-        if (existingUsername) {
-          console.log('Username already exists');
-          return res.status(400).json({ message: "Username is already taken" });
-        }
+      console.log('Checking if username exists:', validatedData.username);
+      const existingUsername = await dbStorage.getUserByUsername(validatedData.username);
+      if (existingUsername) {
+        console.log('Username already exists');
+        return res.status(400).json({ message: "This username is already taken" });
       }
-
-      // Create user
-      console.log('Creating user...');
-      // Extract user data with proper typing
+      
+      // Continue with the registration process using the validated data
       const { confirmPassword, ...userDataFields } = validatedData;
       
       // Create a properly typed user object
@@ -184,24 +245,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post('/api/auth/login', async (req, res) => {
     try {
-      const { email, password } = loginSchema.parse(req.body);
+      console.log('Login attempt received');
+      console.log('Session exists:', !!req.session);
+      console.log('Session ID:', req.sessionID);
       
+      // Validate login data
+      const { email, password } = loginSchema.parse(req.body);
+      console.log('Login attempt for email:', email);
+      
+      // Verify password
       const user = await dbStorage.verifyPassword(email, password);
       if (!user) {
+        console.log('Login failed: Invalid credentials for', email);
         return res.status(401).json({ message: "Invalid email or password" });
       }
       
       // Set session
+      console.log('Login successful for user:', user.username, '(ID:', user.id, ')');
       req.session!.userId = user.id;
       
-      // Return user without password
-      const { password: _, ...userResponse } = user;
-      res.json({ 
-        message: "Welcome back!", 
-        user: userResponse 
+      // Save session explicitly to ensure it's stored before response
+      req.session!.save((err) => {
+        if (err) {
+          console.error('Error saving session:', err);
+          return res.status(500).json({ message: "Session error. Please try again." });
+        }
+        
+        console.log('Session saved successfully with userId:', user.id);
+        console.log('Session cookie parameters:', req.session!.cookie);
+        
+        // Return user without password
+        const { password: _, ...userResponse } = user;
+        res.json({ 
+          message: "Welcome back!", 
+          user: userResponse 
+        });
       });
     } catch (error) {
       if (error instanceof z.ZodError) {
+        console.log('Login validation error:', error.errors);
         return res.status(400).json({ 
           message: "Please check your login information", 
           errors: error.errors 
@@ -223,9 +305,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json({ message: "Logged out successfully" });
   });
 
-  app.get('/api/auth/me', requireAuth, async (req, res) => {
-    const { password, ...userResponse } = req.user!;
-    res.json(userResponse);
+  app.get('/api/auth/me', async (req, res) => {
+    console.log('Auth check request received');
+    console.log('Session exists:', !!req.session);
+    console.log('Session ID:', req.sessionID);
+    
+    // Check if we have a userId in the session
+    const userId = req.session?.userId;
+    console.log('Session userId:', userId || 'not found');
+    
+    if (!userId) {
+      console.log('Auth check failed: No userId in session');
+      return res.status(401).json({ 
+        message: "Authentication required. Please log in to continue." 
+      });
+    }
+    
+    try {
+      // Try to get the user from the database
+      console.log('Looking up user with ID:', userId);
+      const user = await dbStorage.getUserById(userId);
+      
+      if (!user) {
+        console.log('Auth check failed: User not found in database');
+        // Instead of setting session to null, destroy it
+        req.session.destroy((err) => {
+          if (err) console.error('Error destroying session:', err);
+        });
+        return res.status(401).json({ 
+          message: "User not found. Please log in again." 
+        });
+      }
+      
+      console.log('Auth check successful for user:', user.username);
+      // Return user without password
+      const { password, ...userResponse } = user;
+      res.json(userResponse);
+    } catch (error) {
+      console.error("Auth check error:", error);
+      res.status(500).json({ message: "Authentication error" });
+    }
   });
 
   // Password Reset Routes

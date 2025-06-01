@@ -79,6 +79,11 @@ export default function AuthModal({ isOpen, onClose, defaultTab = "login" }: Aut
       });
       queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
       onClose();
+      
+      // Redirect to home page after successful login
+      setTimeout(() => {
+        window.location.href = '/';
+      }, 300); // Small delay to allow toast to show
     },
     onError: (error: any) => {
       toast({
@@ -101,6 +106,11 @@ export default function AuthModal({ isOpen, onClose, defaultTab = "login" }: Aut
       });
       queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
       onClose();
+      
+      // Redirect to home page after successful registration
+      setTimeout(() => {
+        window.location.href = '/';
+      }, 300); // Small delay to allow toast to show
     },
     onError: (error: any) => {
       console.error('Registration error:', error);

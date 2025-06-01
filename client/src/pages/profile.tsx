@@ -1,734 +1,682 @@
-import { useParams, Link } from "wouter";
+import { useState, useEffect } from "react";
+import { useParams } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import type { User } from "@/types/user";
-import type { Video } from "@/types/video";
-import { Button } from "@/components/ui/button";
-import { apiRequest } from "@/lib/queryClient";
-import useVideoActions from "@/hooks/useVideoActions";
-import CommentsModal from "@/components/CommentsModal";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Badge } from "@/components/ui/badge";
-import { Heart, MessageCircle, Share2, Play, Grid3X3, Lock, Edit, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { Heart, Loader2, LogOut, MoreVertical, Trash, Edit, Play } from "lucide-react";
+import MiniPlayer from "@/components/MiniPlayer";
 import { formatNumber } from "@/lib/utils";
 import BottomNavigation from "@/components/BottomNavigation";
 import CreateVideoBar from "@/components/CreateVideoBar";
 import Header from "@/components/Header";
 import { useAuth } from "@/hooks/useAuth";
-import { useState, useEffect } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
+import useVideoActions from "@/hooks/useVideoActions";
+import CommentsModal from "@/components/CommentsModal";
+import type { Video } from "@/types/video";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+
+interface ProfileFormData {
+  displayName: string;
+  bio: string;
+  profileImageUrl: string;
+}
 
 export default function Profile() {
-  const [showUploadModal, setShowUploadModal] = useState(false);
-  const [showEditModal, setShowEditModal] = useState(false);
-  const [isFollowing, setIsFollowing] = useState(false);
-  const [isFollowLoading, setIsFollowLoading] = useState(false);
-  const [selectedVideo, setSelectedVideo] = useState<Video | null>(null);
-  const [showCommentsModal, setShowCommentsModal] = useState(false);
-  const [editForm, setEditForm] = useState({
-    username: '',
-    firstName: '',
-    lastName: '',
-    bio: '',
-    website: '',
-    location: ''
-  });
-  
-  const { userId } = useParams<{ userId?: string }>();
-  const { user: currentUser, isLoading: authLoading, logout, isLoggingOut } = useAuth();
-  const queryClient = useQueryClient();
   const { toast } = useToast();
-  // Check if this is the current user's profile
-  const isOwnProfile = userId === currentUser?.id;
-  // Cast currentUser.id to number since useVideoActions expects a number
-  const { handleLike } = useVideoActions(currentUser?.id ? Number(currentUser.id) : undefined);
+  const { userId: urlUserId } = useParams();
+  const { user: currentUser, isAuthenticated } = useAuth();
+  const queryClient = useQueryClient();
   
-  // Handle sharing a video
-  const handleShare = (video: Video) => {
-    if (navigator.share) {
-      navigator.share({
-        title: video.title,
-        text: `Check out this video on Reelish!`,
-        url: `${window.location.origin}/video/${video.id}`
-      }).catch(() => {
-        // Fallback if sharing fails
-        copyToClipboard(`${window.location.origin}/video/${video.id}`);
+  // Check authentication on component mount
+  useEffect(() => {
+    // If not authenticated and not in the process of loading, redirect to login
+    const checkAuth = async () => {
+      try {
+        const response = await fetch('/api/auth/me');
+        if (!response.ok && response.status === 401) {
+          console.log('Authentication check failed, redirecting to login');
+          window.location.href = '/login';
+        }
+      } catch (error) {
+        console.error('Auth check error:', error);
+      }
+    };
+    
+    checkAuth();
+  }, []);
+  
+  // State for UI components
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [showCommentsModal, setShowCommentsModal] = useState(false);
+  const [selectedVideo, setSelectedVideo] = useState<Video | null>(null);
+  const [showMiniPlayer, setShowMiniPlayer] = useState(false);
+  const [miniPlayerVideo, setMiniPlayerVideo] = useState<Video | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState<number | null>(null);
+  
+  // Form state
+  const [formData, setFormData] = useState<ProfileFormData>({
+    displayName: "",
+    bio: "",
+    profileImageUrl: ""
+  });
+
+  // Determine which user profile to show
+  const userId = urlUserId || (currentUser?.id || "");
+  const isOwnProfile = currentUser?.id === userId;
+  
+  // Fetch user data
+  const {
+    data: userData,
+    isLoading: isUserLoading,
+    error: userError
+  } = useQuery({
+    queryKey: [`user-${userId}`],
+    queryFn: async () => {
+      console.log(`Fetching user data for ID: ${userId}`);
+      const response = await fetch(`/api/users/${userId}`);
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || "Failed to fetch user data");
+      }
+      return response.json();
+    },
+    enabled: !!userId
+  });
+
+  // Fetch user videos
+  const {
+    data: videosData,
+    isLoading: isVideosLoading
+  } = useQuery({
+    queryKey: [`user-videos-${userId}`],
+    queryFn: async () => {
+      console.log(`Fetching videos for user ID: ${userId}`);
+      const response = await fetch(`/api/users/${userId}/videos`);
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || "Failed to fetch user videos");
+      }
+      return response.json();
+    },
+    enabled: !!userId
+  });
+
+  // Check if current user is following the profile user
+  const {
+    data: followData
+  } = useQuery({
+    queryKey: [`follow-status-${userId}`],
+    queryFn: async () => {
+      if (!isAuthenticated || isOwnProfile) return { isFollowing: false };
+      
+      const response = await fetch(`/api/users/${userId}/follow-status`);
+      if (!response.ok) {
+        return { isFollowing: false };
+      }
+      return response.json();
+    },
+    enabled: isAuthenticated && !isOwnProfile && !!userId
+  });
+
+  // Follow/unfollow mutation
+  const followMutation = useMutation({
+    mutationFn: async () => {
+      if (!isAuthenticated) {
+        throw new Error("You must be logged in to follow users");
+      }
+      
+      const action = followData?.isFollowing ? "unfollow" : "follow";
+      const response = await fetch(`/api/users/${userId}/${action}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        }
       });
-    } else {
-      // Fallback for browsers that don't support navigator.share
-      copyToClipboard(`${window.location.origin}/video/${video.id}`);
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || `Failed to ${action} user`);
+      }
+      
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`follow-status-${userId}`] });
+      queryClient.invalidateQueries({ queryKey: [`user-${userId}`] });
+      
+      toast({
+        title: followData?.isFollowing ? "Unfollowed" : "Following",
+        description: followData?.isFollowing 
+          ? `You have unfollowed ${userData?.user?.username}` 
+          : `You are now following ${userData?.user?.username}`,
+        duration: 3000
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error.message,
+        variant: "destructive",
+        duration: 3000
+      });
+    }
+  });
+
+  // Update profile mutation
+  const updateProfileMutation = useMutation({
+    mutationFn: async (data: ProfileFormData) => {
+      if (!isAuthenticated || !isOwnProfile) {
+        throw new Error("You can only edit your own profile");
+      }
+      
+      const response = await fetch(`/api/users/${currentUser.id}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(data)
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || "Failed to update profile");
+      }
+      
+      return response.json();
+    },
+    onSuccess: () => {
+      setShowEditModal(false);
+      queryClient.invalidateQueries({ queryKey: ["current-user"] });
+      queryClient.invalidateQueries({ queryKey: [`user-${userId}`] });
+      
+      toast({
+        title: "Profile Updated",
+        description: "Your profile has been successfully updated",
+        duration: 3000
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Update Failed",
+        description: error.message,
+        variant: "destructive",
+        duration: 3000
+      });
+    }
+  });
+
+  // Initialize form data when user data is loaded
+  const openEditModal = () => {
+    if (userData?.user) {
+      setFormData({
+        displayName: userData.user.displayName || "",
+        bio: userData.user.bio || "",
+        profileImageUrl: userData.user.profileImageUrl || ""
+      });
+      setShowEditModal(true);
     }
   };
-  
-  // Helper function to copy to clipboard
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text).then(() => {
-      toast({
-        title: "Link copied!",
-        description: "Video link copied to clipboard",
-      });
-    }).catch(() => {
-      toast({
-        title: "Failed to copy",
-        description: "Could not copy the link to clipboard",
-        variant: "destructive"
-      });
-    });
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({
+      ...prev,
+      [name]: value
+    }));
   };
-  
-  // Open comments modal for a video
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    updateProfileMutation.mutate(formData);
+  };
+
+  const handleFollowToggle = () => {
+    followMutation.mutate();
+  };
+
+  // Video interaction handlers
+  const { handleLike } = useVideoActions(currentUser?.id ? parseInt(currentUser.id) : undefined);
+
+  const handleVideoClick = (video: Video) => {
+    setMiniPlayerVideo(video);
+    setShowMiniPlayer(true);
+  };
+
+  // Delete video mutation
+  const deleteVideoMutation = useMutation({
+    mutationFn: async (videoId: number) => {
+      const response = await fetch(`/api/videos/${videoId}`, {
+        method: 'DELETE',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || "Failed to delete video");
+      }
+      
+      return response.json();
+    },
+    onSuccess: () => {
+      // Invalidate the videos query to refresh the list
+      queryClient.invalidateQueries({ queryKey: [`user-videos-${userId}`] });
+      toast({
+        title: "Video deleted",
+        description: "Your video has been deleted successfully",
+        duration: 3000
+      });
+      setShowDeleteConfirm(null);
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Delete failed",
+        description: error.message,
+        variant: "destructive",
+        duration: 3000
+      });
+      setShowDeleteConfirm(null);
+    }
+  });
+
+  const closeMiniPlayer = () => {
+    setShowMiniPlayer(false);
+    setMiniPlayerVideo(null);
+  };
+
+  const expandMiniPlayer = () => {
+    if (miniPlayerVideo) {
+      // Navigate to full video page or expand the player
+      window.location.href = `/video/${miniPlayerVideo.id}`;
+    }
+  };
+
+  // Function to open comments modal
   const openComments = (video: Video) => {
     setSelectedVideo(video);
     setShowCommentsModal(true);
   };
-  
-  // If userId is provided, fetch that user's profile, otherwise use the current authenticated user
-  const { data: profileUser, isLoading: userLoading } = useQuery<User>({
-    queryKey: [userId ? `/api/users/${userId}` : '/api/auth/me'],
-    enabled: !authLoading && (!!userId || !!currentUser),
-  });
-  
-  // Use the authenticated user if no userId is provided and profileUser isn't loaded yet
-  const user = userId ? profileUser : (profileUser || currentUser || {}) as User;
 
-  // Check if the current user is following the profile user
-  const { data: followStatus, isLoading: followStatusLoading } = useQuery({
-    queryKey: [`/api/follows/check`, userId, currentUser?.id],
-    queryFn: async () => {
-      if (!userId || !currentUser?.id || userId === currentUser?.id) return { isFollowing: false };
-      try {
-        const response = await fetch(`/api/follows/check?followerId=${currentUser?.id}&followingId=${userId}`, {
-          credentials: 'include'
-        });
-        if (!response.ok) throw new Error('Failed to check follow status');
-        return response.json();
-      } catch (error) {
-        console.error('Error checking follow status:', error);
-        return { isFollowing: false };
-      }
-    },
-    enabled: !!userId && !!currentUser?.id && userId !== currentUser?.id
-  });
-
-  // Set local following state based on API response
-  useEffect(() => {
-    if (followStatus) {
-      setIsFollowing(followStatus.isFollowing);
-    }
-  }, [followStatus]);
-
-  // Get user videos directly from database with robust error handling
-  const { data: videos = [], isLoading: videosLoading, error: videosError, refetch: refetchVideos } = useQuery<Video[]>({
-    queryKey: [`user-videos-${user?.id || ''}`],
-    queryFn: async () => {
-      try {
-        if (!user?.id) {
-          console.log('No user ID available, skipping video fetch');
-          return [];
-        }
-        
-        console.log(`Fetching videos for user: ${user.id}`);
-        
-        // Make a direct fetch request with explicit headers and credentials
-        const response = await fetch(`/api/users/${encodeURIComponent(user.id)}/videos`, {
-          method: 'GET',
-          credentials: 'include',
-          headers: {
-            'Accept': 'application/json',
-            'Content-Type': 'application/json'
-          }
-        });
-        
-        // Check for HTTP errors
-        if (!response.ok) {
-          const errorText = await response.text();
-          console.error(`HTTP error ${response.status}: ${errorText}`);
-          
-          // Show detailed error in toast
-          toast({
-            title: `Error ${response.status}`,
-            description: `Failed to load videos: ${response.statusText}`,
-            variant: "destructive"
-          });
-          
-          throw new Error(`Server returned ${response.status}: ${response.statusText}`);
-        }
-        
-        // Get response as text first to inspect it
-        const text = await response.text();
-        console.log(`Raw response (${text.length} chars):`, text.substring(0, 100) + (text.length > 100 ? '...' : ''));
-        
-        // Try to parse as JSON, but handle HTML or malformed responses
-        try {
-          if (text.trim().startsWith('{') || text.trim().startsWith('[')) {
-            const data = JSON.parse(text);
-            if (Array.isArray(data)) {
-              console.log(`Successfully parsed ${data.length} videos for user ${user.id}`);
-              return data;
-            } else {
-              console.error('Expected array but got:', typeof data);
-              return [];
-            }
-          } else {
-            console.error('Response is not valid JSON:', text.substring(0, 100) + '...');
-            return [];
-          }
-        } catch (parseError) {
-          console.error('JSON parse error:', parseError);
-          return [];
-        }
-      } catch (error) {
-        console.error('Error fetching user videos:', error);
-        toast({
-          title: "Error loading videos",
-          description: "Could not load videos from the server. Please try again later.",
-          variant: "destructive"
-        });
-        return [];
-      }
-    },
-    enabled: !!user?.id,
-    refetchOnWindowFocus: false,
-    retry: 2,
-    retryDelay: 1000,
-    staleTime: 5 * 60 * 1000, // 5 minutes
-  });
-  
-  // Initialize edit form with user data when modal opens
-  useEffect(() => {
-    if (showEditModal && user) {
-      setEditForm({
-        username: (user as any)?.username || '',
-        firstName: (user as any)?.firstName || '',
-        lastName: (user as any)?.lastName || '',
-        bio: (user as any)?.bio || '',
-        website: (user as any)?.website || '',
-        location: (user as any)?.location || ''
+  // Share video function - using Web Share API with fallback
+  const handleShare = (video: Video) => {
+    // Share functionality
+    if (navigator.share) {
+      navigator.share({
+        title: video.title,
+        text: video.description || 'Check out this video!',
+        url: `${window.location.origin}/video/${video.id}`
+      }).catch(err => console.error('Error sharing:', err));
+    } else {
+      // Fallback for browsers that don't support navigator.share
+      const shareUrl = `${window.location.origin}/video/${video.id}`;
+      navigator.clipboard.writeText(shareUrl);
+      toast({
+        title: "Link copied!",
+        description: "Video link copied to clipboard",
+        duration: 3000
       });
     }
-  }, [showEditModal, user]);
-  
-  // Follow/unfollow mutation
-  const followMutation = useMutation({
-    mutationFn: async ({ action, followerId, followingId }: { action: 'follow' | 'unfollow', followerId: string, followingId: string }) => {
-      setIsFollowLoading(true);
-      try {
-        const url = action === 'follow' ? '/api/follows' : `/api/follows/${followerId}/${followingId}`;
-        const method = action === 'follow' ? 'POST' : 'DELETE';
-        
-        const response = await fetch(url, {
-          method,
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: action === 'follow' ? JSON.stringify({ followerId, followingId }) : undefined,
-          credentials: 'include'
-        });
-        
-        if (!response.ok) throw new Error(`Failed to ${action}`);
-        return response.json();
-      } finally {
-        setIsFollowLoading(false);
-      }
-    },
-    onSuccess: () => {
-      // Invalidate relevant queries
-      queryClient.invalidateQueries({ queryKey: [`/api/follows/check`, userId, currentUser?.id] });
-      queryClient.invalidateQueries({ queryKey: [`/api/users/${userId}`] });
-      queryClient.invalidateQueries({ queryKey: [`/api/auth/me`] });
-      
-      // Update local state
-      setIsFollowing(!isFollowing);
-      
-      // Show success toast
-      toast({
-        title: isFollowing ? 'Unfollowed' : 'Following',
-        description: isFollowing ? `You unfollowed this user` : `You are now following this user`,
-      });
-    },
-    onError: (error) => {
-      console.error('Follow error:', error);
-      toast({
-        title: 'Error',
-        description: `Failed to ${isFollowing ? 'unfollow' : 'follow'} user. Please try again.`,
-        variant: 'destructive'
-      });
-    }
-  });
-  
-  // Update profile mutation
-  const updateProfileMutation = useMutation({
-    mutationFn: async (profileData: typeof editForm) => {
-      const response = await fetch(`/api/users/${currentUser?.id}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(profileData),
-        credentials: 'include'
-      });
-      
-      if (!response.ok) throw new Error('Failed to update profile');
-      return response.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [`/api/auth/me`] });
-      queryClient.invalidateQueries({ queryKey: [`/api/users/${currentUser?.id}`] });
-      setShowEditModal(false);
-      toast({
-        title: 'Profile Updated',
-        description: 'Your profile has been successfully updated.',
-      });
-    },
-    onError: (error) => {
-      console.error('Update profile error:', error);
-      toast({
-        title: 'Error',
-        description: 'Failed to update profile. Please try again.',
-        variant: 'destructive'
-      });
-    }
-  });
-  
-  // Handle follow/unfollow button click
-  const handleFollowToggle = () => {
-    if (!currentUser?.id || !userId) return;
-    
-    followMutation.mutate({
-      action: isFollowing ? 'unfollow' : 'follow',
-      followerId: currentUser.id as string,
-      followingId: userId
-    });
   };
   
-  // Handle profile update
-  const handleProfileUpdate = (e: React.FormEvent) => {
-    e.preventDefault();
-    updateProfileMutation.mutate(editForm);
-  };
-  
-  // Handle form field changes
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    const { name, value } = e.target;
-    setEditForm(prev => ({ ...prev, [name]: value }));
-  };
-
-  if (userLoading || authLoading) {
+  // Add share and comment buttons to video items
+  const renderVideoActions = (video: Video) => {
     return (
-      <div className="min-h-screen bg-tiktok-dark flex items-center justify-center">
-        <div className="text-white">Loading...</div>
+      <div className="absolute bottom-1 right-1 flex space-x-1">
+        <div 
+          className="p-1 bg-black/30 rounded-full" 
+          onClick={(e) => {
+            e.stopPropagation();
+            openComments(video);
+          }}
+        >
+          <Play className="h-3 w-3 text-white" />
+        </div>
+        <div 
+          className="p-1 bg-black/30 rounded-full" 
+          onClick={(e) => {
+            e.stopPropagation();
+            handleShare(video);
+          }}
+        >
+          <LogOut className="h-3 w-3 text-white" />
+        </div>
+      </div>
+    );
+  };
+
+  // Loading states
+  if (isUserLoading) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        <p className="mt-2 text-sm text-gray-500">Loading profile...</p>
       </div>
     );
   }
 
-  if (!user) {
+  // Error states
+  if (userError) {
     return (
-      <div className="min-h-screen bg-tiktok-dark flex items-center justify-center">
-        <div className="text-white">User not found</div>
+      <div className="flex flex-col items-center justify-center min-h-screen p-4">
+        <div className="text-center">
+          <h2 className="text-xl font-semibold text-red-500">Error Loading Profile</h2>
+          <p className="mt-2 text-gray-600">{(userError as Error).message || "Failed to load user profile"}</p>
+          <Button className="mt-4" onClick={() => window.location.href = "/"}>
+            Return Home
+          </Button>
+        </div>
       </div>
     );
   }
-  
-  // Safely access user properties with type assertions
-  const username = (user as any)?.username || '';
-  const avatar = (user as any)?.profileImageUrl || '';
-  const verified = (user as any)?.verified || false;
-  const followingCount = (user as any)?.followingCount || 0;
-  const followersCount = (user as any)?.followersCount || 0;
-  const bio = (user as any)?.bio || '';
+
+  const user = userData?.user;
+  // Handle both formats: direct array or nested object with videos property
+  const videos = Array.isArray(videosData) ? videosData : videosData?.videos || [];
+  const isFollowing = followData?.isFollowing || false;
 
   return (
-    <div className="min-h-screen bg-tiktok-dark text-white">
+    <div className="flex flex-col min-h-screen bg-background">
       <Header />
       
-      <div className="pt-16 md:pt-4 pb-20 md:pb-4">
-        {/* Profile Header */}
-        <div className="flex flex-col md:flex-row gap-6 items-center md:items-start p-6 border-b">
-          <div className="relative">
-            <Avatar className="h-24 w-24">
-              {user?.profileImageUrl ? (
-                <AvatarImage src={user.profileImageUrl} alt={user.username} />
-              ) : (
-                <AvatarFallback>{user?.username?.[0]?.toUpperCase() || "U"}</AvatarFallback>
-              )}
-            </Avatar>
+      {/* Profile Header - Smaller Size */}
+      <div className="container px-4 pt-2 pb-8 md:pt-4">
+        <div className="flex flex-col items-center space-y-2">
+          <Avatar className="h-16 w-16 md:h-20 md:w-20 border-2 border-background">
+            <AvatarImage src={user?.profileImageUrl || `https://ui-avatars.com/api/?name=${user?.username}`} />
+            <AvatarFallback>{user?.username?.substring(0, 2).toUpperCase()}</AvatarFallback>
+          </Avatar>
+          
+          <div className="text-center">
+            <h1 className="text-lg md:text-xl font-bold">{user?.displayName || user?.username}</h1>
+            <p className="text-xs text-muted-foreground">@{user?.username}</p>
+            
+            {user?.bio && (
+              <p className="mt-1 text-xs max-w-xs text-center">{user.bio}</p>
+            )}
           </div>
-
-          <div className="flex-1 space-y-4 text-center md:text-left">
-            <div className="flex flex-col md:flex-row md:items-center gap-2">
-              <h1 className="text-2xl font-bold">{user?.username || "User"}</h1>
-              {(user as any)?.verified && (
-                <Badge variant="secondary" className="bg-tiktok-pink text-black">
-                  Verified
-                </Badge>
-              )}
+          
+          {/* Stats */}
+          <div className="flex space-x-6 text-center">
+            <div>
+              <p className="text-sm font-semibold">{formatNumber(userData?.stats?.videoCount || 0)}</p>
+              <p className="text-xs text-muted-foreground">Videos</p>
             </div>
-            
-            <div className="flex space-x-6">
-              <div className="text-center">
-                <div className="font-bold">{formatNumber(followingCount)}</div>
-                <div className="text-sm text-gray-400">Following</div>
-              </div>
-              <div className="text-center">
-                <div className="font-bold">{formatNumber(followersCount)}</div>
-                <div className="text-sm text-gray-400">Followers</div>
-              </div>
-              <div className="text-center">
-                <div className="font-bold">{formatNumber(videos.reduce((sum, video) => sum + (video.likesCount || 0), 0))}</div>
-                <div className="text-sm text-gray-400">Likes</div>
-              </div>
+            <div>
+              <p className="text-sm font-semibold">{formatNumber(userData?.stats?.followersCount || 0)}</p>
+              <p className="text-xs text-muted-foreground">Followers</p>
             </div>
-            
-            {bio && <p className="text-sm">{bio}</p>}
-            
-            <div className="flex flex-wrap gap-2 mt-2">
-              {isOwnProfile ? (
-                <>
-                  <Button 
-                    size="sm" 
-                    variant="outline" 
-                    onClick={() => setShowEditModal(true)}
-                  >
-                    Edit Profile
-                  </Button>
-                  <Button 
-                    size="sm" 
-                    variant="destructive" 
-                    onClick={logout}
-                    disabled={isLoggingOut}
-                  >
-                    {isLoggingOut ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Logging out...
-                      </>
-                    ) : (
-                      "Logout"
-                    )}
-                  </Button>
-                </>
-              ) : (
-                <Button
-                  size="sm"
-                  variant={isFollowing ? "outline" : "default"}
-                  onClick={handleFollowToggle}
-                  disabled={followMutation.isPending}
-                >
-                  {followMutation.isPending ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : isFollowing ? (
-                    "Unfollow"
-                  ) : (
-                    "Follow"
-                  )}
+            <div>
+              <p className="text-sm font-semibold">{formatNumber(userData?.stats?.followingCount || 0)}</p>
+              <p className="text-xs text-muted-foreground">Following</p>
+            </div>
+          </div>
+          
+          {/* Action Buttons */}
+          <div className="flex space-x-2">
+            {isOwnProfile ? (
+              <>
+                <Button onClick={openEditModal} variant="outline" className="px-6">
+                  Edit Profile
                 </Button>
-              )}
-            </div>
+                <Button 
+                  onClick={async () => {
+                    try {
+                      // Show loading toast
+                      toast({
+                        title: "Logging out",
+                        description: "Please wait...",
+                        duration: 2000
+                      });
+                      
+                      // Clear any cached data first
+                      queryClient.clear();
+                      
+                      // Call the logout endpoint directly to ensure it completes
+                      const response = await fetch('/api/auth/logout', {
+                        method: 'POST',
+                        headers: {
+                          'Content-Type': 'application/json'
+                        },
+                        credentials: 'include' // Important for cookies/session
+                      });
+                      
+                      if (response.ok) {
+                        toast({
+                          title: "Logged out",
+                          description: "You have been successfully logged out",
+                          duration: 3000
+                        });
+                        
+                        // Force a full page reload to clear all state
+                        window.location.href = '/login';
+                      } else {
+                        throw new Error('Logout failed');
+                      }
+                    } catch (error) {
+                      toast({
+                        title: "Error",
+                        description: "Failed to log out. Please try again.",
+                        variant: "destructive",
+                        duration: 3000
+                      });
+                    }
+                  }} 
+                  variant="destructive" 
+                  className="px-6"
+                >
+                  <LogOut className="h-4 w-4 mr-2" />
+                  Logout
+                </Button>
+              </>
+            ) : (
+              <Button 
+                onClick={handleFollowToggle} 
+                variant={isFollowing ? "outline" : "default"}
+                disabled={followMutation.isPending || !isAuthenticated}
+                className="px-6"
+              >
+                {followMutation.isPending ? (
+                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                ) : null}
+                {isFollowing ? "Unfollow" : "Follow"}
+              </Button>
+            )}
           </div>
         </div>
-
-        {/* Profile Content */}
-        <Tabs defaultValue="videos" className="w-full">
-          <TabsList className="w-full bg-tiktok-dark border-b border-gray-800 rounded-none h-12">
-            <TabsTrigger value="videos" className="flex-1 data-[state=active]:border-b-2 data-[state=active]:border-white">
-              <Grid3X3 className="w-4 h-4 mr-1" />
-              Videos
-            </TabsTrigger>
-            <TabsTrigger value="liked" className="flex-1 data-[state=active]:border-b-2 data-[state=active]:border-white">
-              <Heart className="w-4 h-4 mr-1" />
-              Liked
-            </TabsTrigger>
-            {/* Only show Private tab if viewing own profile or if admin */}
-            {(!userId || userId === currentUser?.id || (currentUser as any)?.isAdmin) && (
-              <TabsTrigger value="private" className="flex-1 data-[state=active]:border-b-2 data-[state=active]:border-white">
-                <Lock className="w-4 h-4 mr-1" />
-                Private
-              </TabsTrigger>
-            )}
-          </TabsList>
-          
-          <TabsContent value="videos" className="mt-0">
-            {videosLoading ? (
-              <div className="p-4 text-center text-tiktok-light-gray">Loading videos...</div>
-            ) : videosError ? (
-              <div className="p-8 text-center">
-                <div className="text-tiktok-light-gray mb-2">Error loading videos</div>
-                <div className="text-sm text-tiktok-light-gray mb-4">There was a problem fetching videos</div>
-                <Button 
-                  variant="outline" 
-                  size="sm" 
-                  onClick={() => refetchVideos()}
-                  className="text-tiktok-pink border-tiktok-pink hover:bg-tiktok-pink hover:text-white"
-                >
-                  Try Again
-                </Button>
-              </div>
-            ) : videos.length === 0 ? (
-              <div className="p-8 text-center">
-                <div className="text-tiktok-light-gray mb-2">No videos yet</div>
-                <div className="text-sm text-tiktok-light-gray">This user hasn't posted any videos</div>
-              </div>
-            ) : (
-              <div className="grid grid-cols-3 gap-1">
-                {videos.map((video) => (
-                  <div key={video.id} className="aspect-[9/16] relative bg-gray-900 group cursor-pointer">
-                    <img
-                      src={video.thumbnailUrl || video.videoUrl}
-                      alt={video.title}
-                      className="w-full h-full object-cover"
-                    />
-                    <div className="absolute inset-0 bg-black/20 group-hover:bg-black/40 transition-colors" />
-                    
-                    {/* Video action buttons */}
-                    <div className="absolute inset-0 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                      <div className="flex flex-col items-center space-y-4">
-                        {/* Like button */}
-                        <button 
-                          className={`rounded-full p-2 bg-black/50 ${video.isLiked ? 'text-red-500' : 'text-white'} hover:bg-black/70`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleLike(video.id, !!video.isLiked);
-                          }}
-                        >
-                          <Heart className={`w-5 h-5 ${video.isLiked ? 'fill-current' : ''}`} />
-                        </button>
-                        
-                        {/* Comment button */}
-                        <button 
-                          className="rounded-full p-2 bg-black/50 text-white hover:bg-black/70"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openComments(video);
-                          }}
-                        >
-                          <MessageCircle className="w-5 h-5" />
-                        </button>
-                        
-                        {/* Share button */}
-                        <button 
-                          className="rounded-full p-2 bg-black/50 text-white hover:bg-black/70"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleShare(video);
-                          }}
-                        >
-                          <Share2 className="w-5 h-5" />
-                        </button>
-                      </div>
-                    </div>
-                    
-                    <div className="absolute bottom-2 left-2 right-2">
-                      <div className="flex items-center justify-between text-white text-xs">
-                        <div className="flex items-center space-x-1">
-                          <Play className="w-3 h-3" />
-                          <span>{formatNumber(video.viewsCount)}</span>
-                        </div>
-                        <div className="flex items-center space-x-2">
-                          <div className="flex items-center space-x-1">
-                            <Heart className="w-3 h-3" />
-                            <span>{formatNumber(video.likesCount || 0)}</span>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </TabsContent>
-          
-          <TabsContent value="liked" className="mt-0">
-            <div className="p-8 text-center">
-              <div className="text-tiktok-light-gray mb-2">Liked videos are private</div>
-              <div className="text-sm text-tiktok-light-gray">Videos that this user liked are not visible to others</div>
-            </div>
-          </TabsContent>
-          
-          {/* Only render Private tab content if viewing own profile or if admin */}
-          {(!userId || userId === currentUser?.id || (currentUser as any)?.isAdmin) && (
-            <TabsContent value="private" className="mt-0">
-              {videosLoading ? (
-                <div className="p-4 text-center text-tiktok-light-gray">Loading private videos...</div>
-              ) : videosError ? (
-                <div className="p-8 text-center">
-                  <div className="text-tiktok-light-gray mb-2">Error loading private videos</div>
-                  <div className="text-sm text-tiktok-light-gray mb-4">There was a problem fetching private videos</div>
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    onClick={() => refetchVideos()}
-                    className="text-tiktok-pink border-tiktok-pink hover:bg-tiktok-pink hover:text-white"
-                  >
-                    Try Again
-                  </Button>
+        
+        {/* Videos Section */}
+        <div className="mt-8">
+          <Tabs defaultValue="videos" className="w-full">
+            <TabsContent value="videos" className="mt-4">
+              {isVideosLoading ? (
+                <div className="flex justify-center py-8">
+                  <Loader2 className="h-6 w-6 animate-spin text-primary" />
                 </div>
-              ) : videos.filter(video => video.isPrivate).length === 0 ? (
-                <div className="p-8 text-center">
-                  <div className="text-tiktok-light-gray mb-2">No private videos</div>
-                  <div className="text-sm text-tiktok-light-gray">This user hasn't posted any private videos</div>
+              ) : videos.length === 0 ? (
+                <div className="text-center py-8">
+                  <p className="text-muted-foreground">No videos yet</p>
+                  {isOwnProfile && (
+                    <Button className="mt-4" onClick={() => window.location.href = "/upload"}>
+                      Upload a Video
+                    </Button>
+                  )}
                 </div>
               ) : (
-                <div className="grid grid-cols-3 gap-1">
-                  {videos.filter(video => video.isPrivate).map((video) => (
-                    <div key={video.id} className="aspect-[9/16] relative bg-gray-900 group cursor-pointer">
-                      <img
-                        src={video.thumbnailUrl || video.videoUrl}
-                        alt={video.title}
+                <div className="grid grid-cols-3 gap-1 md:gap-2">
+                  {videos.map((video: Video) => (
+                    <div 
+                      key={video.id} 
+                      className="aspect-[9/16] relative overflow-hidden bg-gray-100 rounded-md cursor-pointer"
+                      onClick={() => handleVideoClick(video)}
+                    >
+                      <img 
+                        src={video.thumbnailUrl || `https://picsum.photos/seed/${video.id}/400/600`}
+                        alt={video.title || "Video thumbnail"}
                         className="w-full h-full object-cover"
                       />
-                      <div className="absolute inset-0 bg-black/20 group-hover:bg-black/40 transition-colors" />
-                      
-                      {/* Video action buttons */}
-                      <div className="absolute inset-0 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                        <div className="flex flex-col items-center space-y-4">
-                          {/* Like button */}
-                          <button 
-                            className={`rounded-full p-2 bg-black/50 ${video.isLiked ? 'text-red-500' : 'text-white'} hover:bg-black/70`}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleLike(video.id, !!video.isLiked);
-                            }}
-                          >
-                            <Heart className={`w-5 h-5 ${video.isLiked ? 'fill-current' : ''}`} />
-                          </button>
-                          
-                          {/* Comment button */}
-                          <button 
-                            className="rounded-full p-2 bg-black/50 text-white hover:bg-black/70"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              openComments(video);
-                            }}
-                          >
-                            <MessageCircle className="w-5 h-5" />
-                          </button>
-                          
-                          {/* Share button */}
-                          <button 
-                            className="rounded-full p-2 bg-black/50 text-white hover:bg-black/70"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleShare(video);
-                            }}
-                          >
-                            <Share2 className="w-5 h-5" />
-                          </button>
-                        </div>
+                      <div className="absolute bottom-1 left-1 flex items-center text-white text-xs">
+                        <Play className="h-3 w-3 mr-1" />
+                        <span>{formatNumber(video.viewsCount || 0)}</span>
                       </div>
+                      <div 
+                        className="absolute top-1 right-1 p-1 bg-black/30 rounded-full" 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleLike(Number(video.id), video.isLiked || false);
+                        }}
+                      >
+                        <Heart 
+                          className={`h-3 w-3 ${video.isLiked ? 'text-red-500 fill-red-500' : 'text-white'}`} 
+                        />
+                      </div>
+                      {renderVideoActions(video)}
                       
-                      <div className="absolute bottom-2 left-2 right-2">
-                        <div className="flex items-center justify-between text-white text-xs">
-                          <div className="flex items-center space-x-1">
-                            <Play className="w-3 h-3" />
-                            <span>{formatNumber(video.viewsCount)}</span>
-                          </div>
-                          <div className="flex items-center space-x-2">
-                            <div className="flex items-center space-x-1">
-                              <Heart className="w-3 h-3" />
-                              <span>{formatNumber(video.likesCount || 0)}</span>
-                            </div>
+                      {/* Kebab Menu - Only show for own videos */}
+                      {isOwnProfile && (
+                        <div 
+                          className="absolute top-1 left-1 p-1"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <button className="p-1 bg-black/50 rounded-full text-white hover:bg-black/70 transition-colors">
+                                <MoreVertical className="h-3 w-3" />
+                              </button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="start" className="w-32">
+                              <DropdownMenuItem
+                                className="text-xs cursor-pointer flex items-center gap-1"
+                                onClick={() => {
+                                  // For now, just show a toast since we don't have an update endpoint
+                                  toast({
+                                    title: "Edit video",
+                                    description: "Edit functionality coming soon",
+                                    duration: 3000
+                                  });
+                                }}
+                              >
+                                <Edit className="h-3 w-3 mr-1" /> Edit
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                className="text-xs cursor-pointer flex items-center gap-1 text-red-500 focus:text-red-500"
+                                onClick={() => setShowDeleteConfirm(Number(video.id))}
+                              >
+                                <Trash className="h-3 w-3 mr-1" /> Delete
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </div>
+                      )}
+                      
+                      {/* Delete Confirmation */}
+                      {showDeleteConfirm === Number(video.id) && (
+                        <div 
+                          className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center p-2"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <p className="text-white text-xs text-center mb-2">Are you sure you want to delete this video?</p>
+                          <div className="flex gap-2">
+                            <button 
+                              className="bg-red-500 text-white text-xs px-2 py-1 rounded"
+                              onClick={() => deleteVideoMutation.mutate(Number(video.id))}
+                            >
+                              {deleteVideoMutation.isPending ? "Deleting..." : "Delete"}
+                            </button>
+                            <button 
+                              className="bg-gray-500 text-white text-xs px-2 py-1 rounded"
+                              onClick={() => setShowDeleteConfirm(null)}
+                            >
+                              Cancel
+                            </button>
                           </div>
                         </div>
-                      </div>
+                      )}
                     </div>
                   ))}
                 </div>
               )}
             </TabsContent>
-          )}
-        </Tabs>
+          </Tabs>
+        </div>
       </div>
       
-      <CreateVideoBar />
-      <BottomNavigation onUploadClick={() => setShowUploadModal(true)} />
+      {/* Bottom Navigation */}
+      <div className="mt-auto">
+        <CreateVideoBar />
+        <BottomNavigation />
+      </div>
+      
+      {/* Mini Player */}
+      {showMiniPlayer && miniPlayerVideo && (
+        <MiniPlayer 
+          video={miniPlayerVideo} 
+          onClose={closeMiniPlayer} 
+          onExpand={expandMiniPlayer} 
+        />
+      )}
       
       {/* Comments Modal */}
       {showCommentsModal && selectedVideo && (
-        <CommentsModal 
-          isOpen={showCommentsModal} 
-          onClose={() => setShowCommentsModal(false)} 
-          videoId={selectedVideo.id} 
-          currentUserId={currentUser?.id} 
+        <CommentsModal
+          videoId={Number(selectedVideo.id)}
+          isOpen={showCommentsModal}
+          onClose={() => setShowCommentsModal(false)}
+          currentUserId={currentUser?.id}
         />
       )}
       
       {/* Edit Profile Modal */}
       <Dialog open={showEditModal} onOpenChange={setShowEditModal}>
-        <DialogContent className="sm:max-w-[425px] bg-black border-gray-800">
+        <DialogContent>
           <DialogHeader>
-            <DialogTitle className="text-white text-xl">Edit Profile</DialogTitle>
+            <DialogTitle>Edit Profile</DialogTitle>
           </DialogHeader>
           
-          <form onSubmit={handleProfileUpdate} className="space-y-4 mt-4">
+          <form onSubmit={handleSubmit} className="space-y-4 mt-4">
             <div className="space-y-2">
-              <Label htmlFor="username" className="text-white">Username</Label>
+              <Label htmlFor="displayName">Display Name</Label>
               <Input
-                id="username"
-                name="username"
-                value={editForm.username}
+                id="displayName"
+                name="displayName"
+                value={formData.displayName}
                 onChange={handleInputChange}
-                className="bg-gray-900 border-gray-700 text-white"
+                placeholder="Your display name"
               />
             </div>
             
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="firstName" className="text-white">First Name</Label>
-                <Input
-                  id="firstName"
-                  name="firstName"
-                  value={editForm.firstName}
-                  onChange={handleInputChange}
-                  className="bg-gray-900 border-gray-700 text-white"
-                />
-              </div>
-              
-              <div className="space-y-2">
-                <Label htmlFor="lastName" className="text-white">Last Name</Label>
-                <Input
-                  id="lastName"
-                  name="lastName"
-                  value={editForm.lastName}
-                  onChange={handleInputChange}
-                  className="bg-gray-900 border-gray-700 text-white"
-                />
-              </div>
-            </div>
-            
             <div className="space-y-2">
-              <Label htmlFor="bio" className="text-white">Bio</Label>
+              <Label htmlFor="bio">Bio</Label>
               <Textarea
                 id="bio"
                 name="bio"
-                value={editForm.bio}
+                value={formData.bio}
                 onChange={handleInputChange}
-                className="bg-gray-900 border-gray-700 text-white min-h-[100px]"
+                placeholder="Tell us about yourself"
+                rows={3}
               />
             </div>
             
             <div className="space-y-2">
-              <Label htmlFor="website" className="text-white">Website</Label>
+              <Label htmlFor="profileImageUrl">Profile Image URL</Label>
               <Input
-                id="website"
-                name="website"
-                value={editForm.website}
+                id="profileImageUrl"
+                name="profileImageUrl"
+                value={formData.profileImageUrl}
                 onChange={handleInputChange}
-                className="bg-gray-900 border-gray-700 text-white"
-              />
-            </div>
-            
-            <div className="space-y-2">
-              <Label htmlFor="location" className="text-white">Location</Label>
-              <Input
-                id="location"
-                name="location"
-                value={editForm.location}
-                onChange={handleInputChange}
-                className="bg-gray-900 border-gray-700 text-white"
+                placeholder="https://example.com/your-image.jpg"
               />
             </div>
             
@@ -737,16 +685,19 @@ export default function Profile() {
                 type="button" 
                 variant="outline" 
                 onClick={() => setShowEditModal(false)}
-                className="border-gray-700 text-white hover:bg-gray-800"
               >
                 Cancel
               </Button>
               <Button 
                 type="submit" 
-                className="bg-tiktok-pink hover:bg-tiktok-pink/80 text-black"
                 disabled={updateProfileMutation.isPending}
               >
-                {updateProfileMutation.isPending ? 'Saving...' : 'Save Changes'}
+                {updateProfileMutation.isPending ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                    Saving...
+                  </>
+                ) : "Save Changes"}
               </Button>
             </div>
           </form>

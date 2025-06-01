@@ -28,17 +28,42 @@ export default function UploadModal({ isOpen, onClose, currentUserId, defaultHas
 
   const uploadMutation = useMutation({
     mutationFn: async (formData: FormData) => {
-      const response = await fetch("/api/videos", {
-        method: "POST",
-        body: formData,
-      });
+      console.log('Starting video upload with authentication...');
       
-      if (!response.ok) {
-        const error = await response.text();
-        throw new Error(error || "Upload failed");
+      // Log session cookie for debugging (without exposing sensitive data)
+      console.log('Cookie exists:', document.cookie.includes('connect.sid'));
+      
+      try {
+        const response = await fetch("/api/videos", {
+          method: "POST",
+          body: formData,
+          credentials: "include", // This is crucial for sending cookies/session data
+          headers: {
+            // Don't set Content-Type with FormData as the browser will set it with the boundary
+          }
+        });
+        
+        // Log response details for debugging
+        console.log('Upload response status:', response.status);
+        console.log('Upload response headers:', [...response.headers.entries()]);
+        
+        if (!response.ok) {
+          let errorMessage = `Upload failed with status ${response.status}`;
+          try {
+            const errorText = await response.text();
+            console.error('Upload error details:', errorText);
+            errorMessage = errorText || errorMessage;
+          } catch (parseError) {
+            console.error('Could not parse error response:', parseError);
+          }
+          throw new Error(errorMessage);
+        }
+        
+        return response.json();
+      } catch (error) {
+        console.error('Upload network error:', error);
+        throw error;
       }
-      
-      return response.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/videos"] });
@@ -84,11 +109,39 @@ export default function UploadModal({ isOpen, onClose, currentUserId, defaultHas
     }
   };
 
-  const handleUpload = () => {
+  const handleUpload = async () => {
+    // Check if user is authenticated
     if (!currentUserId) {
       toast({
         title: "Please log in",
         description: "You need to be logged in to upload videos.",
+        variant: "destructive",
+      });
+      onClose(); // Close the modal
+      return;
+    }
+    
+    // Verify authentication status before proceeding
+    try {
+      // Check current auth status
+      const authResponse = await fetch('/api/auth/me', {
+        credentials: 'include'
+      });
+      
+      if (!authResponse.ok) {
+        toast({
+          title: "Authentication error",
+          description: "Your session may have expired. Please log in again.",
+          variant: "destructive",
+        });
+        onClose(); // Close the modal
+        return;
+      }
+    } catch (error) {
+      console.error('Auth verification failed:', error);
+      toast({
+        title: "Connection error",
+        description: "Could not verify your authentication status. Please try again.",
         variant: "destructive",
       });
       return;

@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { Heart, MessageCircle, Share, Music, MoreHorizontal, Play, Pause, VolumeX, Volume2 } from "lucide-react";
-import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
+import { Heart, MessageCircle, Share, Music, MoreHorizontal, Play, VolumeX, Volume2 } from "lucide-react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
@@ -36,11 +36,12 @@ interface VideoPlayerProps {
 
 export default function VideoPlayer({ video, isActive = false, currentUserId }: VideoPlayerProps) {
   const [isPlaying, setIsPlaying] = useState(false);
-  const [isMuted, setIsMuted] = useState(true);
+  const [isMuted, setIsMuted] = useState(false); // Set to false for sound on by default
   const [showComments, setShowComments] = useState(false);
   const [isLiked, setIsLiked] = useState(video.isLiked || false);
   const [likesCount, setLikesCount] = useState(video.likesCount || 0);
   const [isFollowing, setIsFollowing] = useState(video.isFollowing || false);
+  const [videoError, setVideoError] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const { user } = useAuth();
   const { toast } = useToast();
@@ -50,13 +51,64 @@ export default function VideoPlayer({ video, isActive = false, currentUserId }: 
     const videoElement = videoRef.current;
     if (!videoElement) return;
 
-    if (isActive) {
-      videoElement.play().then(() => setIsPlaying(true)).catch(() => {});
+    // Add error event handler
+    const handleError = (e: Event) => {
+      console.log(`Error playing video ID ${video.id}:`, (e.target as HTMLMediaElement).error);
+      
+      // Log the attempted video URL for debugging
+      const videoSrc = video.videoUrl.startsWith('/uploads/') 
+        ? `/api/stream/${video.videoUrl.replace('/uploads/', '')}` 
+        : video.videoUrl;
+      console.log(`Attempted to load video from: ${videoSrc}`);
+      
+      // Check if the user is authenticated by making a quick auth check
+      fetch('/api/auth/me')
+        .then(response => {
+          if (!response.ok && response.status === 401) {
+            console.log('Authentication error: User is not logged in');
+            // If we get a 401, we need to redirect to login
+            window.location.href = '/login';
+          }
+        })
+        .catch(err => console.error('Auth check error:', err));
+      
+      setVideoError(true);
+      setIsPlaying(false);
+    };
+
+    videoElement.addEventListener('error', handleError);
+
+    // Force reload the video source when becoming active
+    if (isActive && !videoError) {
+      // Set the current time to 0 to start from the beginning
+      videoElement.currentTime = 0;
+      
+      // Add a small delay before playing to ensure the video has loaded
+      const playPromise = setTimeout(() => {
+        videoElement.play()
+          .then(() => {
+            console.log(`Video playing: ID ${video.id}`);
+            setIsPlaying(true);
+          })
+          .catch((err) => {
+            console.error(`Error playing video ID ${video.id}:`, err);
+            // Try one more time after a short delay
+            setTimeout(() => {
+              videoElement.play().catch(() => {});
+            }, 500);
+          });
+      }, 100);
+      
+      return () => clearTimeout(playPromise);
     } else {
       videoElement.pause();
       setIsPlaying(false);
     }
-  }, [isActive]);
+
+    return () => {
+      videoElement.removeEventListener('error', handleError);
+    };
+  }, [isActive, video.id, videoError]);
 
   const togglePlay = () => {
     const videoElement = videoRef.current;
@@ -161,31 +213,61 @@ export default function VideoPlayer({ video, isActive = false, currentUserId }: 
   };
 
   return (
-    <div className="relative w-full h-screen bg-black flex items-center justify-center">
+    <div className="relative w-full h-[85vh] bg-black flex items-center justify-center">
       {/* Video */}
       <div className="relative max-w-sm h-full">
-        <video
-          ref={videoRef}
-          className="w-full h-full object-cover rounded-lg"
-          src={video.videoUrl}
-          loop
-          muted={isMuted}
-          playsInline
-          onClick={togglePlay}
-        />
-        
-        {/* Play/Pause Overlay */}
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          {!isPlaying && (
-            <Button
-              size="lg"
-              className="bg-white/20 hover:bg-white/30 text-white rounded-full pointer-events-auto"
+        {videoError ? (
+          <div className="w-full h-full flex flex-col items-center justify-center bg-gray-900 rounded-lg p-4">
+            <div className="text-white text-center mb-4">
+              <svg className="w-16 h-16 mx-auto mb-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+              </svg>
+              <h3 className="text-xl font-bold">Video Unavailable</h3>
+              <p className="text-gray-400 mt-2">This video could not be loaded</p>
+            </div>
+            <img 
+              src={`https://picsum.photos/seed/${video.id}/400/600`} 
+              alt={video.title} 
+              className="w-full h-3/4 object-cover rounded-lg opacity-50"
+            />
+          </div>
+        ) : (
+          <>
+            <video
+              ref={videoRef}
+              className="w-full h-full object-cover rounded-lg"
+              loop
+              muted={isMuted}
+              playsInline
               onClick={togglePlay}
+              preload="auto"
+              poster={`https://picsum.photos/seed/${video.id}/400/600`}
             >
-              <Play className="w-8 h-8" />
-            </Button>
-          )}
-        </div>
+              {/* Use the streaming endpoint for better video delivery */}
+              <source 
+                src={video.videoUrl.startsWith('/uploads/') 
+                  ? `/api/stream/${video.videoUrl.replace('/uploads/', '')}` 
+                  : video.videoUrl
+                } 
+                type="video/mp4" 
+              />
+              Your browser does not support the video tag.
+            </video>
+            
+            {/* Play/Pause Overlay */}
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              {!isPlaying && (
+                <Button
+                  size="lg"
+                  className="bg-white/20 hover:bg-white/30 text-white rounded-full pointer-events-auto"
+                  onClick={togglePlay}
+                >
+                  <Play className="w-8 h-8" />
+                </Button>
+              )}
+            </div>
+          </>
+        )}
 
         {/* Volume Control */}
         <Button

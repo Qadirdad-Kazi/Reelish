@@ -35,7 +35,8 @@ interface VideoFeedProps {
 export default function VideoFeed({ currentUserId, showPublicOnly = false, hashtagFilter, videos: providedVideos, randomMode = false }: VideoFeedProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [currentVideoIndex, setCurrentVideoIndex] = useState(0);
-  const [offset, setOffset] = useState(0);
+  const [scrollDirection, setScrollDirection] = useState<'up' | 'down' | null>(null);
+  const [offset] = useState(0); // We're not updating offset in this component currently
   const limit = 10;
 
   // Only fetch videos if no videos are provided
@@ -94,6 +95,8 @@ export default function VideoFeed({ currentUserId, showPublicOnly = false, hasht
     if (!container) return;
 
     let startY = 0;
+    let wheelTimeout: NodeJS.Timeout | null = null;
+    let isScrolling = false;
     
     const handleTouchStart = (e: TouchEvent) => {
       startY = e.touches[0].clientY;
@@ -103,21 +106,73 @@ export default function VideoFeed({ currentUserId, showPublicOnly = false, hasht
       const endY = e.changedTouches[0].clientY;
       const diff = startY - endY;
 
-      if (Math.abs(diff) > 50) {
+      if (Math.abs(diff) > 30) { // Reduced threshold for more responsive touch gestures
         if (diff > 0 && currentVideoIndex < videos.length - 1) {
           // Swipe up - next video
           const nextIndex = currentVideoIndex + 1;
           setCurrentVideoIndex(nextIndex);
+          setScrollDirection('down');
           const nextVideo = container.children[nextIndex] as HTMLElement;
-          nextVideo.scrollIntoView({ behavior: 'smooth' });
+          nextVideo.classList.add('video-animate-down');
+          nextVideo.scrollIntoView({ behavior: 'auto' });
+          setTimeout(() => {
+            nextVideo.classList.remove('video-animate-down');
+          }, 500);
         } else if (diff < 0 && currentVideoIndex > 0) {
           // Swipe down - previous video
           const prevIndex = currentVideoIndex - 1;
           setCurrentVideoIndex(prevIndex);
+          setScrollDirection('up');
           const prevVideo = container.children[prevIndex] as HTMLElement;
-          prevVideo.scrollIntoView({ behavior: 'smooth' });
+          prevVideo.classList.add('video-animate-up');
+          prevVideo.scrollIntoView({ behavior: 'auto' });
+          setTimeout(() => {
+            prevVideo.classList.remove('video-animate-up');
+          }, 500);
         }
       }
+    };
+
+    // Trackpad/wheel scrolling for laptops
+    const handleWheel = (e: WheelEvent) => {
+      // Prevent default to disable native scrolling
+      e.preventDefault();
+      
+      // If already scrolling, don't trigger another scroll
+      if (isScrolling) return;
+      
+      // Process wheel events more quickly with reduced debounce
+      if (wheelTimeout) clearTimeout(wheelTimeout);
+      
+      wheelTimeout = setTimeout(() => {
+        const delta = e.deltaY;
+        const threshold = 10; // Lower threshold for faster response
+        
+        if (Math.abs(delta) > threshold) {
+          isScrolling = true;
+          
+          if (delta > 0 && currentVideoIndex < videos.length - 1) {
+            // Scroll down - next video
+            const nextIndex = currentVideoIndex + 1;
+            setCurrentVideoIndex(nextIndex);
+            setScrollDirection('down');
+            const nextVideo = container.children[nextIndex] as HTMLElement;
+            nextVideo.scrollIntoView({ behavior: 'auto' }); // Changed to 'auto' for faster scrolling
+          } else if (delta < 0 && currentVideoIndex > 0) {
+            // Scroll up - previous video
+            const prevIndex = currentVideoIndex - 1;
+            setCurrentVideoIndex(prevIndex);
+            setScrollDirection('up');
+            const prevVideo = container.children[prevIndex] as HTMLElement;
+            prevVideo.scrollIntoView({ behavior: 'auto' }); // Changed to 'auto' for faster scrolling
+          }
+          
+          // Reset scrolling flag after animation completes - reduced time for faster transitions
+          setTimeout(() => {
+            isScrolling = false;
+          }, 300);
+        }
+      }, 20); // Reduced debounce time for faster response
     };
 
     // Keyboard navigation for desktop
@@ -137,12 +192,15 @@ export default function VideoFeed({ currentUserId, showPublicOnly = false, hasht
 
     container.addEventListener('touchstart', handleTouchStart);
     container.addEventListener('touchend', handleTouchEnd);
+    container.addEventListener('wheel', handleWheel, { passive: false });
     document.addEventListener('keydown', handleKeyDown);
 
     return () => {
       container.removeEventListener('touchstart', handleTouchStart);
       container.removeEventListener('touchend', handleTouchEnd);
+      container.removeEventListener('wheel', handleWheel);
       document.removeEventListener('keydown', handleKeyDown);
+      if (wheelTimeout) clearTimeout(wheelTimeout);
     };
   }, [currentVideoIndex, videos?.length]);
 
@@ -206,15 +264,22 @@ export default function VideoFeed({ currentUserId, showPublicOnly = false, hasht
     <div
       ref={containerRef}
       className="h-full overflow-y-auto hide-scrollbar"
-      style={{ scrollSnapType: 'y mandatory' }}
+      style={{ scrollSnapType: 'y mandatory', height: 'calc(100vh - 120px)' }}
     >
       {videos.map((video, index) => (
-        <VideoPlayer
+        <div 
           key={video.id}
-          video={video}
-          isActive={index === currentVideoIndex}
-          currentUserId={currentUserId}
-        />
+          className={`${index === currentVideoIndex ? 
+            scrollDirection === 'up' ? 'video-animate-up' : 
+            scrollDirection === 'down' ? 'video-animate-down' : 
+            'video-animate-in' : ''}`}
+        >
+          <VideoPlayer
+            video={video}
+            isActive={index === currentVideoIndex}
+            currentUserId={currentUserId}
+          />
+        </div>
       ))}
     </div>
   );

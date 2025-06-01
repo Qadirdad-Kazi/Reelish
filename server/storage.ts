@@ -241,33 +241,76 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getVideosByUser(userId: string, currentUserId?: string): Promise<VideoWithUser[]> {
-    // Build the query conditions
-    // Fix column name mismatch: userId in code vs user_id in database
-    const conditions = [eq(videos.userId, userId)];
-    
-    // Only include private videos if the current user is the owner
-    if (currentUserId !== userId) {
-      conditions.push(eq(videos.isPrivate, false));
-    }
-    
-    const results = await db
-      .select()
-      .from(videos)
-      .innerJoin(users, eq(videos.userId, users.id))
-      .where(and(...conditions))
-      .orderBy(desc(videos.createdAt));
-    
-    return Promise.all(results.map(async (result) => {
-      const isLiked = currentUserId ? await this.isVideoLiked(currentUserId, result.videos.id) : false;
-      const isFollowing = currentUserId ? await this.isFollowing(currentUserId, result.users.id) : false;
+    try {
+      console.log(`getVideosByUser called with userId=${userId}, currentUserId=${currentUserId || 'undefined'}`);
       
-      return {
-        ...result.videos,
-        user: result.users,
-        isLiked,
-        isFollowing,
-      };
-    }));
+      // Build the query conditions
+      const conditions = [eq(videos.userId, userId)];
+      
+      // Only include private videos if the current user is the owner
+      if (currentUserId !== userId) {
+        conditions.push(eq(videos.isPrivate, false));
+      }
+      
+      console.log('Executing database query for videos');
+      const results = await db
+        .select()
+        .from(videos)
+        .innerJoin(users, eq(videos.userId, users.id))
+        .where(and(...conditions))
+        .orderBy(desc(videos.createdAt));
+      
+      console.log(`Query returned ${results.length} videos`);
+      
+      // Process each video with error handling for individual items
+      const processedVideos = await Promise.all(
+        results.map(async (result) => {
+          try {
+            // Default values in case of errors
+            let isLiked = false;
+            let isFollowing = false;
+            
+            // Only try to get like/follow status if we have a current user
+            if (currentUserId) {
+              try {
+                isLiked = await this.isVideoLiked(currentUserId, result.videos.id);
+              } catch (likeError) {
+                console.error(`Error checking like status for video ${result.videos.id}:`, likeError);
+              }
+              
+              try {
+                isFollowing = await this.isFollowing(currentUserId, result.users.id);
+              } catch (followError) {
+                console.error(`Error checking follow status for user ${result.users.id}:`, followError);
+              }
+            }
+            
+            return {
+              ...result.videos,
+              user: result.users,
+              isLiked,
+              isFollowing,
+            };
+          } catch (itemError) {
+            console.error(`Error processing video ${result.videos.id}:`, itemError);
+            // Return a minimal valid object to prevent the entire request from failing
+            return {
+              ...result.videos,
+              user: result.users,
+              isLiked: false,
+              isFollowing: false,
+            };
+          }
+        })
+      );
+      
+      console.log(`Successfully processed ${processedVideos.length} videos`);
+      return processedVideos;
+    } catch (error) {
+      console.error('Error in getVideosByUser:', error);
+      // Return an empty array instead of throwing an error
+      return [];
+    }
   }
 
   async getFeedVideos(offset = 0, limit = 10, currentUserId?: string): Promise<VideoWithUser[]> {
