@@ -1,329 +1,236 @@
 import { useState } from "react";
-import { useParams } from "wouter";
+import { useParams, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent } from "@/components/ui/card";
-import { Hash, TrendingUp, Users, Play, Heart, MessageCircle, Share } from "lucide-react";
-import VideoPlayer from "@/components/VideoPlayer";
 import Header from "@/components/Header";
 import BottomNavigation from "@/components/BottomNavigation";
-import { Link } from "wouter";
+import Sidebar from "@/components/Sidebar";
+import VideoFeed from "@/components/VideoFeed";
+import { useAuth } from "@/hooks/useAuth";
+import UploadModal from "@/components/UploadModal";
+import { Button } from "@/components/ui/button";
+import { Share2, Bookmark, Hash, TrendingUp, Grid3X3, Play, Heart } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { Badge } from "@/components/ui/badge";
 
-interface HashtagPageData {
-  hashtag: {
-    id: number;
-    name: string;
-    description?: string;
-    videosCount: number;
-    viewsCount: number;
-    trending: boolean;
-    usageCount: number;
-  };
-  videos: Array<{
-    id: number;
-    title: string;
-    description?: string;
-    videoUrl: string;
-    thumbnailUrl?: string;
-    musicName?: string;
-    hashtags?: string[];
-    likesCount: number;
-    commentsCount: number;
-    sharesCount: number;
-    viewsCount: number;
-    user: {
-      id: string;
-      username: string;
-      firstName?: string;
-      lastName?: string;
-      profileImageUrl?: string;
-    };
-    isLiked?: boolean;
-    isFollowing?: boolean;
-  }>;
+interface HashtagStats {
+  videosCount: number;
+  viewsCount: number;
+  trending?: boolean;
 }
 
-export default function HashtagPage() {
-  const { hashtag } = useParams<{ hashtag: string }>();
-  const [selectedVideoIndex, setSelectedVideoIndex] = useState(0);
+export default function Hashtag() {
+  const { tag } = useParams<{ tag: string }>();
+  const [showUploadModal, setShowUploadModal] = useState(false);
   const [viewMode, setViewMode] = useState<'grid' | 'feed'>('grid');
-
-  const { data, isLoading, error } = useQuery({
-    queryKey: [`/api/hashtags/${hashtag}`],
-    enabled: !!hashtag,
+  const { user } = useAuth();
+  const { toast } = useToast();
+  
+  // Fetch videos with the specified hashtag
+  const { data: hashtagVideos = [], isLoading } = useQuery<any[]>({
+    queryKey: [`/api/hashtags/${tag}/videos`],
+    queryFn: async () => {
+      try {
+        const response = await fetch(`/api/hashtags/${tag}/videos`, {
+          credentials: 'include'
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Error fetching hashtag videos: ${response.statusText}`);
+        }
+        
+        return response.json();
+      } catch (error) {
+        console.error('Error fetching hashtag videos:', error);
+        return [];
+      }
+    },
+    enabled: !!tag
   });
 
-  const hashtagData = data as HashtagPageData;
+  // Get hashtag statistics
+  const { data: hashtagStats } = useQuery<HashtagStats>({
+    queryKey: [`/api/hashtags/${tag}/stats`],
+    queryFn: async () => {
+      try {
+        const response = await fetch(`/api/hashtags/${tag}/stats`, {
+          credentials: 'include'
+        });
+        
+        if (!response.ok) {
+          return { videosCount: 0, viewsCount: 0 };
+        }
+        
+        return response.json();
+      } catch (error) {
+        console.error('Error fetching hashtag stats:', error);
+        return { videosCount: 0, viewsCount: 0 };
+      }
+    },
+    enabled: !!tag
+  });
 
-  if (isLoading) {
-    return (
-      <div className="min-h-screen bg-black text-white flex items-center justify-center">
-        <div className="text-center">
-          <div className="w-12 h-12 border-4 border-pink-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-lg">Loading #{hashtag}...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (error || !hashtagData) {
-    return (
-      <div className="min-h-screen bg-black text-white">
-        <Header />
-        <div className="pt-16 pb-20 flex items-center justify-center">
-          <div className="text-center">
-            <Hash className="w-16 h-16 mx-auto mb-4 text-gray-600" />
-            <h2 className="text-2xl font-bold mb-2">Hashtag not found</h2>
-            <p className="text-gray-400 mb-4">#{hashtag} doesn't exist or has no videos yet.</p>
-            <Link href="/discover">
-              <Button className="bg-pink-600 hover:bg-pink-700">
-                Discover Trending Hashtags
-              </Button>
-            </Link>
-          </div>
-        </div>
-        <BottomNavigation />
-      </div>
-    );
-  }
-
+  const shareHashtag = () => {
+    const url = `${window.location.origin}/hashtag/${tag}`;
+    navigator.clipboard.writeText(url);
+    toast({
+      title: "Link copied!",
+      description: "Hashtag link copied to clipboard",
+    });
+  };
+  
+  const saveHashtag = () => {
+    // This would typically save the hashtag to the user's favorites
+    toast({
+      title: "Hashtag saved",
+      description: `#${tag} has been saved to your favorites`,
+    });
+  };
+  
   const formatCount = (count: number) => {
     if (count >= 1000000) return `${(count / 1000000).toFixed(1)}M`;
     if (count >= 1000) return `${(count / 1000).toFixed(1)}K`;
     return count.toString();
   };
 
-  if (viewMode === 'feed' && hashtagData.videos.length > 0) {
+  // Show feed view if selected and videos are available
+  if (viewMode === 'feed' && hashtagVideos.length > 0) {
     return (
-      <div className="min-h-screen bg-black">
-        <div className="fixed top-0 left-0 right-0 z-50 p-4">
+      <div className="h-screen flex flex-col relative bg-tiktok-dark">
+        <div className="fixed top-0 left-0 right-0 z-50 p-4 bg-black/50">
           <div className="flex items-center justify-between">
-            <Link href="/discover">
-              <Button variant="ghost" size="sm" className="text-white bg-black/50 hover:bg-black/70 rounded-full">
-                ← Back
-              </Button>
-            </Link>
             <Button 
               variant="ghost" 
               size="sm" 
-              className="text-white bg-black/50 hover:bg-black/70 rounded-full"
+              className="text-white hover:bg-black/70 rounded-full"
               onClick={() => setViewMode('grid')}
             >
-              Grid View
+              ← Back to Grid
             </Button>
           </div>
         </div>
         
-        <div className="snap-y snap-mandatory h-screen overflow-y-auto">
-          {hashtagData.videos.map((video, index) => (
-            <div key={video.id} className="snap-start h-screen">
-              <VideoPlayer video={video} isActive={index === selectedVideoIndex} />
-            </div>
-          ))}
+        <div className="h-screen">
+          <VideoFeed currentUserId={user?.id} videos={hashtagVideos} />
         </div>
       </div>
     );
   }
 
+  // Default grid view
   return (
-    <div className="min-h-screen bg-black text-white">
+    <div className="h-screen flex flex-col relative bg-tiktok-dark">
       <Header />
-      
-      <div className="pt-16 pb-20">
-        <div className="max-w-6xl mx-auto p-4">
-          {/* Hashtag Header */}
-          <div className="text-center mb-8">
-            <div className="flex items-center justify-center mb-4">
-              <div className="w-20 h-20 bg-gradient-to-r from-pink-600 to-purple-600 rounded-full flex items-center justify-center">
-                <Hash className="w-10 h-10 text-white" />
+      <Sidebar />
+
+      <main className="flex-1 md:ml-16 pt-16">
+        <div className="p-4 border-b border-gray-800">
+          <div className="flex justify-between items-center">
+            <div>
+              <h1 className="text-white text-3xl font-bold mb-2">#{tag}</h1>
+              <div className="flex space-x-4 text-tiktok-light-gray">
+                <span>{formatCount(hashtagStats?.videosCount || 0)} videos</span>
+                <span>{formatCount(hashtagStats?.viewsCount || 0)} views</span>
               </div>
-              {hashtagData.hashtag.trending && (
-                <div className="ml-3">
-                  <Badge className="bg-yellow-600 text-white">
-                    <TrendingUp className="w-3 h-3 mr-1" />
-                    Trending
-                  </Badge>
-                </div>
-              )}
             </div>
             
-            <h1 className="text-4xl font-bold mb-2">#{hashtagData.hashtag.name}</h1>
-            
-            {hashtagData.hashtag.description && (
-              <p className="text-gray-400 text-lg mb-4 max-w-2xl mx-auto">
-                {hashtagData.hashtag.description}
-              </p>
-            )}
-
-            <div className="flex items-center justify-center space-x-8 mb-6">
-              <div className="text-center">
-                <div className="text-2xl font-bold text-pink-500">
-                  {formatCount(hashtagData.hashtag.videosCount)}
-                </div>
-                <div className="text-sm text-gray-400">Videos</div>
-              </div>
-              <div className="text-center">
-                <div className="text-2xl font-bold text-purple-500">
-                  {formatCount(hashtagData.hashtag.viewsCount)}
-                </div>
-                <div className="text-sm text-gray-400">Views</div>
-              </div>
-              <div className="text-center">
-                <div className="text-2xl font-bold text-blue-500">
-                  {formatCount(hashtagData.hashtag.usageCount)}
-                </div>
-                <div className="text-sm text-gray-400">Posts</div>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-center space-x-4">
-              <Button 
-                className="bg-pink-600 hover:bg-pink-700"
-                onClick={() => window.location.href = `/upload?hashtag=${hashtag}`}
-              >
-                Create Video with #{hashtag}
-              </Button>
+            <div className="flex space-x-2">
               <Button 
                 variant="outline" 
-                className="border-white text-white hover:bg-white hover:text-black"
-                onClick={() => setViewMode('feed')}
-                disabled={hashtagData.videos.length === 0}
+                size="icon" 
+                className="rounded-full border-gray-700 text-white hover:bg-gray-800"
+                onClick={shareHashtag}
               >
-                <Play className="w-4 h-4 mr-2" />
-                Watch Videos
+                <Share2 className="h-5 w-5" />
+              </Button>
+              
+              <Button 
+                variant="outline" 
+                size="icon" 
+                className="rounded-full border-gray-700 text-white hover:bg-gray-800"
+                onClick={saveHashtag}
+              >
+                <Bookmark className="h-5 w-5" />
               </Button>
             </div>
           </div>
-
-          {/* Videos Grid */}
-          <div className="mb-6">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-2xl font-bold">
-                Videos ({formatCount(hashtagData.videos.length)})
-              </h2>
-              <div className="flex space-x-2">
-                <Button
-                  variant={viewMode === 'grid' ? 'default' : 'outline'}
-                  size="sm"
-                  onClick={() => setViewMode('grid')}
-                  className={viewMode === 'grid' ? 'bg-pink-600' : ''}
-                >
-                  Grid
-                </Button>
-                <Button
-                  variant={viewMode === 'feed' ? 'default' : 'outline'}
-                  size="sm"
-                  onClick={() => setViewMode('feed')}
-                  className={viewMode === 'feed' ? 'bg-pink-600' : ''}
-                  disabled={hashtagData.videos.length === 0}
-                >
-                  Feed
-                </Button>
-              </div>
+          
+          <p className="text-tiktok-light-gray mt-4 mb-6">
+            Explore videos with <span className="text-tiktok-pink">#{tag}</span>
+          </p>
+          
+          {hashtagVideos.length > 0 && (
+            <div className="flex justify-end mb-4">
+              <Button 
+                variant="outline" 
+                className="border-gray-700 text-white hover:bg-gray-800"
+                onClick={() => setViewMode('feed')}
+              >
+                <Play className="h-4 w-4 mr-2" />
+                Play All
+              </Button>
             </div>
-
-            {hashtagData.videos.length === 0 ? (
-              <div className="text-center py-12">
-                <Hash className="w-16 h-16 mx-auto mb-4 text-gray-600" />
-                <h3 className="text-xl font-semibold mb-2">No videos yet</h3>
-                <p className="text-gray-400 mb-4">
-                  Be the first to create a video with #{hashtag}!
-                </p>
-                <Button 
-                  className="bg-pink-600 hover:bg-pink-700"
-                  onClick={() => window.location.href = `/upload?hashtag=${hashtag}`}
-                >
-                  Create First Video
-                </Button>
-              </div>
-            ) : (
-              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                {hashtagData.videos.map((video, index) => (
-                  <Card 
-                    key={video.id} 
-                    className="bg-gray-900 border-gray-800 cursor-pointer hover:border-pink-500 transition-colors group"
-                    onClick={() => {
-                      setSelectedVideoIndex(index);
-                      setViewMode('feed');
-                    }}
-                  >
-                    <CardContent className="p-0 relative aspect-[9/16]">
-                      {video.thumbnailUrl ? (
-                        <img
-                          src={video.thumbnailUrl}
-                          alt={video.title}
-                          className="w-full h-full object-cover rounded-lg"
-                        />
-                      ) : (
-                        <div className="w-full h-full bg-gradient-to-br from-gray-800 to-gray-900 rounded-lg flex items-center justify-center">
-                          <Play className="w-12 h-12 text-gray-600" />
-                        </div>
-                      )}
-                      
-                      {/* Video Stats Overlay */}
-                      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-3">
-                        <div className="flex items-center space-x-4 text-white">
-                          <div className="flex items-center space-x-1">
-                            <Heart className="w-4 h-4" />
-                            <span className="text-sm">{formatCount(video.likesCount)}</span>
-                          </div>
-                          <div className="flex items-center space-x-1">
-                            <MessageCircle className="w-4 h-4" />
-                            <span className="text-sm">{formatCount(video.commentsCount)}</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Play Button Overlay */}
-                      <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                        <div className="w-12 h-12 bg-white/20 rounded-full flex items-center justify-center">
-                          <Play className="w-6 h-6 text-white ml-1" />
-                        </div>
-                      </div>
-
-                      {/* Creator Info */}
-                      <div className="absolute top-3 left-3">
-                        <Link href={`/profile/${video.user.id}`}>
-                          <div className="flex items-center space-x-2 bg-black/50 rounded-full p-2 hover:bg-black/70 transition-colors">
-                            <img
-                              src={video.user.profileImageUrl || `https://api.dicebear.com/7.x/avataaars/svg?seed=${video.user.username}`}
-                              alt={video.user.username}
-                              className="w-6 h-6 rounded-full"
-                            />
-                            <span className="text-white text-sm font-medium">
-                              @{video.user.username}
-                            </span>
-                          </div>
-                        </Link>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Related Hashtags */}
-          <div className="mt-12">
-            <h3 className="text-xl font-bold mb-4">Related Hashtags</h3>
-            <div className="flex flex-wrap gap-3">
-              {['viral', 'fyp', 'trending', 'dance', 'music', 'funny', 'challenge', 'duet'].map((tag) => (
-                <Link key={tag} href={`/hashtag/${tag}`}>
-                  <Badge 
-                    variant="secondary" 
-                    className="bg-gray-800 text-white hover:bg-gray-700 cursor-pointer px-4 py-2 text-sm"
-                  >
-                    #{tag}
-                  </Badge>
-                </Link>
-              ))}
-            </div>
-          </div>
+          )}
         </div>
-      </div>
+        
+        {isLoading ? (
+          <div className="h-full flex items-center justify-center">
+            <div className="text-white">Loading videos...</div>
+          </div>
+        ) : hashtagVideos.length === 0 ? (
+          <div className="h-full flex items-center justify-center">
+            <div className="text-center">
+              <div className="text-white text-xl mb-2">No videos found</div>
+              <div className="text-tiktok-light-gray">Be the first to create a video with #{tag}</div>
+              <Button 
+                className="mt-4 bg-tiktok-pink hover:bg-tiktok-pink/80 text-black"
+                onClick={() => setShowUploadModal(true)}
+              >
+                Create Now
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="p-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+            {hashtagVideos.map((video) => (
+              <div key={video.id} className="relative aspect-[9/16] rounded-md overflow-hidden group cursor-pointer">
+                <Link href={`/video/${video.id}`}>
+                  <div className="absolute inset-0 bg-black/30 group-hover:bg-black/10 transition-all duration-200"></div>
+                  <video 
+                    src={video.videoUrl} 
+                    className="w-full h-full object-cover"
+                    muted 
+                    playsInline
+                    loop
+                    onMouseOver={(e) => e.currentTarget.play()}
+                    onMouseOut={(e) => e.currentTarget.pause()}
+                  />
+                  <div className="absolute bottom-2 left-2 right-2 text-white text-sm">
+                    <div className="line-clamp-1 font-medium">{video.title}</div>
+                    <div className="flex items-center mt-1 text-xs text-gray-300">
+                      <div className="flex items-center mr-2">
+                        <Heart className="w-3 h-3 mr-1" />
+                        {formatCount(video.likesCount || 0)}
+                      </div>
+                      <div className="flex items-center">
+                        @{video.user.username}
+                      </div>
+                    </div>
+                  </div>
+                </Link>
+              </div>
+            ))}
+          </div>
+        )}
+      </main>
 
-      <BottomNavigation />
+      <BottomNavigation onUploadClick={() => setShowUploadModal(true)} />
+      
+      <UploadModal
+        isOpen={showUploadModal}
+        onClose={() => setShowUploadModal(false)}
+        currentUserId={user?.id}
+        defaultHashtag={tag}
+      />
     </div>
   );
 }

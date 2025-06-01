@@ -1,15 +1,14 @@
-import { Home, Compass, Users, User, Music } from "lucide-react";
+import { Home, Compass, User, Music } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useLocation } from "wouter";
 
 export default function Sidebar() {
-  const [location] = useLocation();
+  const [location, setLocation] = useLocation();
 
   const navItems = [
-    { icon: Home, path: "/", active: location === "/" },
-    { icon: Compass, path: "/discover", active: location === "/discover" },
-    { icon: Users, path: "/following", active: location === "/following" },
-    { icon: User, path: "/profile", active: location.startsWith("/profile") },
+    { icon: Home, path: "/", active: location === "/", label: "Home" },
+    { icon: Compass, path: "/discover", active: location === "/discover", label: "Discover" },
+    { icon: User, path: "/profile", active: location.startsWith("/profile"), label: "Profile" },
   ];
 
   return (
@@ -26,6 +25,7 @@ export default function Sidebar() {
             key={index}
             variant="ghost"
             size="icon"
+            onClick={() => setLocation(item.path)}
             className={`w-full p-3 rounded-lg transition-colors ${
               item.active
                 ? "bg-tiktok-pink/20 text-tiktok-pink"

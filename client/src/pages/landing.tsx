@@ -37,7 +37,7 @@ export default function Landing() {
         <div className="relative z-10 text-center max-w-4xl mx-auto px-6">
           <div className="mb-8">
             <h1 className="text-6xl md:text-8xl font-black mb-6 bg-gradient-to-r from-pink-500 via-purple-500 to-blue-500 bg-clip-text text-transparent">
-              VibeShare
+              Reelish
             </h1>
             <p className="text-xl md:text-2xl text-gray-300 mb-8 max-w-2xl mx-auto">
               Share Your Vibe. Create amazing videos, discover trending sounds, and connect with creators worldwide.
@@ -50,7 +50,7 @@ export default function Landing() {
               className="bg-pink-600 hover:bg-pink-700 text-white px-8 py-3 text-lg font-semibold rounded-full transition-all duration-300 transform hover:scale-105"
             >
               <Sparkles className="w-5 h-5 mr-2" />
-              Join VibeShare
+              Join Reelish
             </Button>
             <Button
               onClick={() => openAuth("login")}
@@ -83,7 +83,7 @@ export default function Landing() {
       <div className="py-20 px-6">
         <div className="max-w-6xl mx-auto">
           <h2 className="text-4xl md:text-5xl font-bold text-center mb-16 bg-gradient-to-r from-pink-400 to-purple-400 bg-clip-text text-transparent">
-            Why TikTok?
+            Why Reelish?
           </h2>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
@@ -127,7 +127,7 @@ export default function Landing() {
             Ready to Start Creating?
           </h2>
           <p className="text-xl text-gray-300 mb-8">
-            Join millions of creators and start your TikTok journey today. It's free, fun, and full of possibilities.
+            Join millions of creators and start your Reelish journey today. It's free, fun, and full of possibilities.
           </p>
           <Button
             onClick={() => openAuth("register")}

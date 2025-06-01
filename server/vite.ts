@@ -1,12 +1,21 @@
 import express, { type Express } from "express";
 import fs from "fs";
 import path from "path";
-import { createServer as createViteServer, createLogger } from "vite";
 import { type Server } from "http";
-import viteConfig from "../vite.config";
 import { nanoid } from "nanoid";
+import { fileURLToPath } from "url";
 
-const viteLogger = createLogger();
+// ES modules replacement for __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Create a custom logger
+const viteLogger = {
+  info: (msg: string) => console.log(`\x1b[36m[vite]\x1b[0m ${msg}`),
+  warn: (msg: string) => console.log(`\x1b[33m[vite]\x1b[0m ${msg}`),
+  error: (msg: string, options?: { clear?: boolean; timestamp?: boolean }) => console.error(`\x1b[31m[vite]\x1b[0m ${msg}`),
+  clearScreen: () => console.clear()
+};
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
@@ -20,55 +29,51 @@ export function log(message: string, source = "express") {
 }
 
 export async function setupVite(app: Express, server: Server) {
-  const serverOptions = {
-    middlewareMode: true,
-    hmr: { server },
-    allowedHosts: true,
-  };
-
-  const vite = await createViteServer({
-    ...viteConfig,
-    configFile: false,
-    customLogger: {
-      ...viteLogger,
-      error: (msg, options) => {
-        viteLogger.error(msg, options);
-        process.exit(1);
-      },
-    },
-    server: serverOptions,
-    appType: "custom",
+  // Instead of using Vite's internal API, we'll use a simple static file server
+  // for production and let the client handle development separately
+  const distPath = path.resolve(__dirname, '../dist/public');
+  log(`Resolved dist path: ${distPath}`, 'vite');
+  
+  if (fs.existsSync(distPath)) {
+    log('Serving static files from ' + distPath);
+    app.use(express.static(distPath));
+  } else {
+    log('No static files found at ' + distPath + ', serving API only');
+  }
+  
+  // Simple API route to check if the server is running
+  app.get('/api/status', (req, res) => {
+    res.json({ status: 'ok', timestamp: new Date().toISOString() });
   });
-
-  app.use(vite.middlewares);
-  app.use("*", async (req, res, next) => {
+  
+  // Fallback route for SPA - but don't intercept API requests
+  app.use('*', (req, res, next) => {
     const url = req.originalUrl;
+    
+    // Skip API routes - they should be handled by their own handlers
+    if (url.startsWith('/api/')) {
+      return next();
+    }
 
     try {
-      const clientTemplate = path.resolve(
-        import.meta.dirname,
-        "..",
-        "client",
-        "index.html",
-      );
-
-      // always reload the index.html file from disk incase it changes
-      let template = await fs.promises.readFile(clientTemplate, "utf-8");
-      template = template.replace(
-        `src="/src/main.tsx"`,
-        `src="/src/main.tsx?v=${nanoid()}"`,
-      );
-      const page = await vite.transformIndexHtml(url, template);
-      res.status(200).set({ "Content-Type": "text/html" }).end(page);
+      // If we have a built index.html, serve that
+      const indexPath = path.resolve(__dirname, '../dist/public/index.html');
+      if (fs.existsSync(indexPath)) {
+        res.sendFile(indexPath);
+      } else {
+        // Otherwise, send a simple message
+        res.status(200).set({ "Content-Type": "text/html" })
+          .end(`<html><body><h1>Reelish API Server</h1><p>API is running. Frontend is not built.</p></body></html>`);
+      }
     } catch (e) {
-      vite.ssrFixStacktrace(e as Error);
       next(e);
     }
   });
 }
 
 export function serveStatic(app: Express) {
-  const distPath = path.resolve(import.meta.dirname, "public");
+  const distPath = path.resolve(__dirname, '../dist/public');
+  log(`Static serving from: ${distPath}`, 'vite');
 
   if (!fs.existsSync(distPath)) {
     throw new Error(
@@ -77,9 +82,21 @@ export function serveStatic(app: Express) {
   }
 
   app.use(express.static(distPath));
+  
+  // Add a specific API status endpoint
+  app.get('/api/status', (req, res) => {
+    res.json({ status: 'ok', mode: 'production', timestamp: new Date().toISOString() });
+  });
 
-  // fall through to index.html if the file doesn't exist
-  app.use("*", (_req, res) => {
+  // fall through to index.html if the file doesn't exist, but don't intercept API routes
+  app.use("*", (req, res, next) => {
+    const url = req.originalUrl;
+    
+    // Skip API routes - they should be handled by their own handlers
+    if (url.startsWith('/api/')) {
+      return next();
+    }
+    
     res.sendFile(path.resolve(distPath, "index.html"));
   });
 }

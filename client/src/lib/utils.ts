@@ -5,13 +5,15 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-export function formatNumber(num: number): string {
-  if (num >= 1000000) {
-    return (num / 1000000).toFixed(1) + 'M';
-  } else if (num >= 1000) {
-    return (num / 1000).toFixed(1) + 'K';
+export function formatNumber(num: number | null): string {
+  // Handle null values by defaulting to 0
+  const safeNum = num ?? 0;
+  if (safeNum >= 1000000) {
+    return (safeNum / 1000000).toFixed(1) + 'M';
+  } else if (safeNum >= 1000) {
+    return (safeNum / 1000).toFixed(1) + 'K';
   }
-  return num.toString();
+  return safeNum.toString();
 }
 
 export function formatTimeAgo(date: Date | string): string {

@@ -4,10 +4,11 @@ import BottomNavigation from "@/components/BottomNavigation";
 import Sidebar from "@/components/Sidebar";
 import Header from "@/components/Header";
 import UploadModal from "@/components/UploadModal";
+import { useAuth } from "@/hooks/useAuth";
 
 export default function Home() {
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
-  const [currentUserId] = useState(1); // Mock current user
+  const { user } = useAuth();
 
   return (
     <div className="h-screen flex flex-col relative bg-tiktok-dark">
@@ -19,7 +20,15 @@ export default function Home() {
 
       {/* Main Content Area */}
       <main className="flex-1 md:ml-16">
-        <VideoFeed currentUserId={currentUserId} />
+        <div className="p-4 text-white text-center">
+          <h1 className="text-2xl font-bold mb-4">Discover Random Videos</h1>
+          <p className="text-gray-300 mb-6">Explore content from creators across the platform</p>
+        </div>
+        <VideoFeed 
+          currentUserId={user?.id} 
+          showPublicOnly={true} 
+          randomMode={true} 
+        />
       </main>
 
       {/* Bottom Navigation */}
@@ -29,7 +38,7 @@ export default function Home() {
       <UploadModal
         isOpen={isUploadModalOpen}
         onClose={() => setIsUploadModalOpen(false)}
-        currentUserId={currentUserId}
+        currentUserId={user?.id}
       />
     </div>
   );

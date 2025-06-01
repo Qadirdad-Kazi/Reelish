@@ -5,9 +5,9 @@ import {
   type InsertUser, type InsertVideo, type InsertComment, type InsertLike, type InsertFollow,
   type VideoWithUser, type CommentWithUser, type UserWithStats, type InsertVideoView,
   type InsertMessage, type InsertNotification, type Tag, type VideoView
-} from "@shared/schema";
+} from "./shared/schema";
 import { db } from "./db";
-import { eq, desc, asc, like, and, or, sql, count, inArray } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, gte, ilike, inArray, isNotNull, isNull, like, lt, lte, ne, not, or, sql } from 'drizzle-orm';
 import { nanoid } from "nanoid";
 import bcrypt from "bcryptjs";
 
@@ -30,6 +30,7 @@ export interface IStorage {
   getVideoWithUser(id: number, currentUserId?: string): Promise<VideoWithUser | undefined>;
   getVideosByUser(userId: string, currentUserId?: string): Promise<VideoWithUser[]>;
   getFeedVideos(offset?: number, limit?: number, currentUserId?: string): Promise<VideoWithUser[]>;
+  getRandomVideos(limit?: number, currentUserId?: string): Promise<VideoWithUser[]>;
   getTrendingVideos(offset?: number, limit?: number, currentUserId?: string): Promise<VideoWithUser[]>;
   createVideo(video: InsertVideo): Promise<Video>;
   updateVideo(id: number, updates: Partial<Video>): Promise<Video | undefined>;
@@ -81,15 +82,27 @@ export class DatabaseStorage implements IStorage {
   // Authentication
   async createUser(insertUser: InsertUser): Promise<User> {
     const id = nanoid();
-    const hashedPassword = insertUser.password ? await bcrypt.hash(insertUser.password, 12) : undefined;
+    // Type assertion to access password property safely
+    const userData = insertUser as unknown as { password?: string };
+    const hashedPassword = userData.password ? await bcrypt.hash(userData.password, 12) : undefined;
+    
+    // Create a properly typed user object with required fields
+    const userToInsert = {
+      id,
+      email: (insertUser as any).email as string,
+      username: (insertUser as any).username as string,
+      password: hashedPassword,
+      followersCount: 0,
+      followingCount: 0,
+      videosCount: 0,
+      verified: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
     
     const [user] = await db
       .insert(users)
-      .values({
-        ...insertUser,
-        id,
-        password: hashedPassword,
-      })
+      .values(userToInsert)
       .returning();
     
     return user;
@@ -228,11 +241,20 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getVideosByUser(userId: string, currentUserId?: string): Promise<VideoWithUser[]> {
+    // Build the query conditions
+    // Fix column name mismatch: userId in code vs user_id in database
+    const conditions = [eq(videos.userId, userId)];
+    
+    // Only include private videos if the current user is the owner
+    if (currentUserId !== userId) {
+      conditions.push(eq(videos.isPrivate, false));
+    }
+    
     const results = await db
       .select()
       .from(videos)
       .innerJoin(users, eq(videos.userId, users.id))
-      .where(eq(videos.userId, userId))
+      .where(and(...conditions))
       .orderBy(desc(videos.createdAt));
     
     return Promise.all(results.map(async (result) => {
@@ -256,6 +278,29 @@ export class DatabaseStorage implements IStorage {
       .where(eq(videos.isPrivate, false))
       .orderBy(desc(videos.createdAt))
       .offset(offset)
+      .limit(limit);
+    
+    return Promise.all(results.map(async (result) => {
+      const isLiked = currentUserId ? await this.isVideoLiked(currentUserId, result.videos.id) : false;
+      const isFollowing = currentUserId ? await this.isFollowing(currentUserId, result.users.id) : false;
+      
+      return {
+        ...result.videos,
+        user: result.users,
+        isLiked,
+        isFollowing,
+      };
+    }));
+  }
+
+  async getRandomVideos(limit = 20, currentUserId?: string): Promise<VideoWithUser[]> {
+    // Use SQL's random() function to get random videos
+    const results = await db
+      .select()
+      .from(videos)
+      .innerJoin(users, eq(videos.userId, users.id))
+      .where(eq(videos.isPrivate, false))
+      .orderBy(sql`RANDOM()`)
       .limit(limit);
     
     return Promise.all(results.map(async (result) => {
@@ -295,9 +340,55 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createVideo(insertVideo: InsertVideo): Promise<Video> {
+    // Type assertion to access required properties safely
+    const videoData = insertVideo as unknown as { 
+      userId: string;
+      title: string;
+      videoUrl: string;
+      description?: string;
+      thumbnailUrl?: string;
+      musicName?: string;
+      isPrivate?: boolean;
+      hashtags?: string[];
+      mentions?: string[];
+      fileSize?: number;
+      format?: string;
+      duration?: number;
+      allowComments?: boolean;
+      allowDuet?: boolean;
+      allowDownload?: boolean;
+    };
+    
+    console.log('Creating video with data:', JSON.stringify(videoData, null, 2));
+    
+    // Create a properly typed video object with required fields
+    const videoToInsert = {
+      userId: videoData.userId,
+      title: videoData.title,
+      videoUrl: videoData.videoUrl,
+      description: videoData.description || null,
+      thumbnailUrl: videoData.thumbnailUrl || null,
+      musicName: videoData.musicName || null,
+      isPrivate: videoData.isPrivate || false,
+      hashtags: videoData.hashtags || [],
+      mentions: videoData.mentions || [],
+      fileSize: videoData.fileSize || 0,
+      format: videoData.format || null,
+      duration: videoData.duration || 0,
+      allowComments: videoData.allowComments !== false,
+      allowDuet: videoData.allowDuet !== false,
+      allowDownload: videoData.allowDownload !== false,
+      viewsCount: 0,
+      likesCount: 0,
+      commentsCount: 0,
+      sharesCount: 0,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    
     const [video] = await db
       .insert(videos)
-      .values(insertVideo)
+      .values(videoToInsert)
       .returning();
     
     // Update user's videos count
@@ -307,7 +398,7 @@ export class DatabaseStorage implements IStorage {
         videosCount: sql`${users.videosCount} + 1`,
         updatedAt: new Date()
       })
-      .where(eq(users.id, insertVideo.userId));
+      .where(eq(users.id, videoData.userId));
     
     return video;
   }
@@ -344,7 +435,22 @@ export class DatabaseStorage implements IStorage {
   }
 
   async recordVideoView(view: InsertVideoView): Promise<void> {
-    await db.insert(videoViews).values(view);
+    // Type assertion to access required properties safely
+    const viewData = view as unknown as { 
+      videoId: number;
+      userId?: string;
+      completedView?: boolean;
+    };
+    
+    // Create a properly typed view object with required fields
+    const viewToInsert = {
+      videoId: viewData.videoId,
+      userId: viewData.userId || null,
+      completedView: viewData.completedView || false,
+      createdAt: new Date()
+    };
+    
+    await db.insert(videoViews).values(viewToInsert);
     
     // Update video view count
     await db
@@ -353,7 +459,7 @@ export class DatabaseStorage implements IStorage {
         viewsCount: sql`${videos.viewsCount} + 1`,
         updatedAt: new Date()
       })
-      .where(eq(videos.id, view.videoId));
+      .where(eq(videos.id, viewData.videoId));
   }
 
   // Comments
@@ -387,9 +493,29 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createComment(insertComment: InsertComment): Promise<Comment> {
+    // Type assertion to access required properties safely
+    const commentData = insertComment as unknown as { 
+      userId: string;
+      videoId: number;
+      content: string;
+      parentId?: number;
+    };
+    
+    // Create a properly typed comment object with required fields
+    const commentToInsert = {
+      userId: commentData.userId,
+      videoId: commentData.videoId,
+      content: commentData.content,
+      parentId: commentData.parentId || null,
+      likesCount: 0,
+      repliesCount: 0,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    
     const [comment] = await db
       .insert(comments)
-      .values(insertComment)
+      .values(commentToInsert)
       .returning();
     
     // Update video comments count
@@ -399,7 +525,7 @@ export class DatabaseStorage implements IStorage {
         commentsCount: sql`${videos.commentsCount} + 1`,
         updatedAt: new Date()
       })
-      .where(eq(videos.id, insertComment.videoId));
+      .where(eq(videos.id, commentData.videoId));
     
     return comment;
   }
@@ -430,28 +556,43 @@ export class DatabaseStorage implements IStorage {
 
   // Likes
   async createLike(insertLike: InsertLike): Promise<Like> {
+    // Type assertion to access required properties safely
+    const likeData = insertLike as unknown as { 
+      userId: string;
+      videoId?: number;
+      commentId?: number;
+    };
+    
+    // Create a properly typed like object with required fields
+    const likeToInsert = {
+      userId: likeData.userId,
+      videoId: likeData.videoId || null,
+      commentId: likeData.commentId || null,
+      createdAt: new Date()
+    };
+    
     const [like] = await db
       .insert(likes)
-      .values(insertLike)
+      .values(likeToInsert)
       .returning();
     
     // Update counts
-    if (insertLike.videoId) {
+    if (likeData.videoId) {
       await db
         .update(videos)
         .set({ 
           likesCount: sql`${videos.likesCount} + 1`,
           updatedAt: new Date()
         })
-        .where(eq(videos.id, insertLike.videoId));
-    } else if (insertLike.commentId) {
+        .where(eq(videos.id, likeData.videoId));
+    } else if (likeData.commentId) {
       await db
         .update(comments)
         .set({ 
           likesCount: sql`${comments.likesCount} + 1`,
           updatedAt: new Date()
         })
-        .where(eq(comments.id, insertLike.commentId));
+        .where(eq(comments.id, likeData.commentId));
     }
     
     return like;
@@ -519,9 +660,22 @@ export class DatabaseStorage implements IStorage {
 
   // Follows
   async createFollow(insertFollow: InsertFollow): Promise<Follow> {
+    // Type assertion to access required properties safely
+    const followData = insertFollow as unknown as { 
+      followerId: string;
+      followingId: string;
+    };
+    
+    // Create a properly typed follow object with required fields
+    const followToInsert = {
+      followerId: followData.followerId,
+      followingId: followData.followingId,
+      createdAt: new Date()
+    };
+    
     const [follow] = await db
       .insert(follows)
-      .values(insertFollow)
+      .values(followToInsert)
       .returning();
     
     // Update follow counts
@@ -532,7 +686,7 @@ export class DatabaseStorage implements IStorage {
           followingCount: sql`${users.followingCount} + 1`,
           updatedAt: new Date()
         })
-        .where(eq(users.id, insertFollow.followerId)),
+        .where(eq(users.id, followData.followerId)),
       
       db
         .update(users)
@@ -540,7 +694,7 @@ export class DatabaseStorage implements IStorage {
           followersCount: sql`${users.followersCount} + 1`,
           updatedAt: new Date()
         })
-        .where(eq(users.id, insertFollow.followingId))
+        .where(eq(users.id, followData.followingId))
     ]);
     
     return follow;
@@ -601,6 +755,15 @@ export class DatabaseStorage implements IStorage {
       isFollowing: false, // Can be enhanced with current user context
     }));
   }
+  
+  async getFollowerCount(userId: string): Promise<number> {
+    const result = await db
+      .select({ count: count() })
+      .from(follows)
+      .where(eq(follows.followingId, userId));
+    
+    return result[0]?.count ?? 0;
+  }
 
   async getFollowing(userId: string, offset = 0, limit = 20): Promise<UserWithStats[]> {
     const results = await db
@@ -608,6 +771,7 @@ export class DatabaseStorage implements IStorage {
       .from(follows)
       .innerJoin(users, eq(follows.followingId, users.id))
       .where(eq(follows.followerId, userId))
+      .orderBy(desc(follows.createdAt))
       .offset(offset)
       .limit(limit);
     
@@ -616,20 +780,94 @@ export class DatabaseStorage implements IStorage {
       isFollowing: true,
     }));
   }
+  
+  async getFollowingCount(userId: string): Promise<number> {
+    const result = await db
+      .select({ count: count() })
+      .from(follows)
+      .where(eq(follows.followerId, userId));
+    
+    return result[0]?.count ?? 0;
+  }
 
   // Search
   async searchUsers(query: string, currentUserId?: string): Promise<UserWithStats[]> {
+    // Simple search implementation that looks for matches in username, firstName, and lastName
+    const cleanQuery = query.toLowerCase();
+    const terms = cleanQuery.split(' ');
+    
+    // Build the search conditions
+    const conditions = [
+      like(users.username, `%${cleanQuery}%`),
+      like(users.firstName, `%${cleanQuery}%`),
+      like(users.lastName, `%${cleanQuery}%`),
+      // For full name search, use SQL directly
+      sql`CONCAT(COALESCE(${users.firstName}, ''), ' ', COALESCE(${users.lastName}, '')) LIKE ${`%${cleanQuery}%`}`
+    ];
+    
+    // If we have exactly two terms, try first name + last name combinations
+    if (terms.length === 2 && terms[0] && terms[1]) {
+      const term0 = terms[0];
+      const term1 = terms[1];
+      
+      // Make sure firstName and lastName are not null before using them in conditions
+      if (users.firstName && users.lastName) {
+        // Try first name + last name
+        conditions.push(
+          sql`(${users.firstName} LIKE ${`%${term0}%`} AND ${users.lastName} LIKE ${`%${term1}%`})`
+        );
+        // Also try reverse order (last name first, first name second)
+        conditions.push(
+          sql`(${users.firstName} LIKE ${`%${term1}%`} AND ${users.lastName} LIKE ${`%${term0}%`})`
+        );
+      }
+    }
+    
+    // Get all users that match any of the conditions
     const results = await db
       .select()
       .from(users)
-      .where(or(
-        like(users.username, `%${query}%`),
-        like(users.firstName, `%${query}%`),
-        like(users.lastName, `%${query}%`)
-      ))
-      .limit(20);
+      .where(or(...conditions))
+      .limit(50);
     
-    return Promise.all(results.map(async (user) => ({
+    // Score and sort results based on match quality
+    const scoredResults = results.map(user => {
+      let score = 0;
+      const username = user.username?.toLowerCase() || '';
+      const firstName = user.firstName?.toLowerCase() || '';
+      const lastName = user.lastName?.toLowerCase() || '';
+      const fullName = `${firstName} ${lastName}`.trim();
+      
+      // Exact matches get highest score
+      if (username === query.toLowerCase()) score += 100;
+      if (firstName === query.toLowerCase()) score += 80;
+      if (lastName === query.toLowerCase()) score += 80;
+      if (fullName === query.toLowerCase()) score += 100;
+      
+      // Partial matches get lower scores
+      if (username.includes(query.toLowerCase())) score += 50;
+      if (firstName.includes(query.toLowerCase())) score += 40;
+      if (lastName.includes(query.toLowerCase())) score += 40;
+      if (fullName.includes(query.toLowerCase())) score += 60;
+      
+      // Match individual terms
+      terms.forEach(term => {
+        if (username.includes(term)) score += 30;
+        if (firstName.includes(term)) score += 25;
+        if (lastName.includes(term)) score += 25;
+      });
+      
+      return { user, score };
+    });
+    
+    // Sort by score and take top 20
+    const sortedResults = scoredResults
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 20)
+      .map(item => item.user);
+    
+    // Add following status
+    return Promise.all(sortedResults.map(async (user) => ({
       ...user,
       isFollowing: currentUserId ? await this.isFollowing(currentUserId, user.id) : false,
     })));
@@ -663,21 +901,70 @@ export class DatabaseStorage implements IStorage {
   }
 
   async searchHashtags(query: string): Promise<Tag[]> {
-    return db
+    // Remove # if present at the beginning of the query
+    const cleanQuery = query.startsWith('#') ? query.substring(1) : query;
+    
+    // First try exact match with LOWER function
+    const exactMatches = await db
       .select()
       .from(tags)
-      .where(like(tags.name, `%${query}%`))
+      .where(sql`LOWER(${tags.name}) = ${cleanQuery.toLowerCase()}`)
+      .orderBy(desc(tags.usageCount));
+    
+    // Then try partial matches if we don't have enough exact matches
+    if (exactMatches.length >= 5) {
+      return exactMatches.slice(0, 20);
+    }
+    
+    // Get partial matches excluding exact matches we already have
+    const exactMatchIds = exactMatches.map(tag => tag.id);
+    const partialMatches = await db
+      .select()
+      .from(tags)
+      .where(
+        exactMatchIds.length > 0 
+          ? and(
+              like(tags.name, `%${cleanQuery}%`),
+              not(inArray(tags.id, exactMatchIds))
+            )
+          : like(tags.name, `%${cleanQuery}%`)
+      )
       .orderBy(desc(tags.usageCount))
-      .limit(20);
+      .limit(20 - exactMatches.length);
+    
+    return [...exactMatches, ...partialMatches];
   }
 
   async getTrendingHashtags(limit = 10): Promise<Tag[]> {
-    return db
+    // First try to get trending hashtags
+    const trendingTags = await db
       .select()
       .from(tags)
       .where(eq(tags.trending, true))
       .orderBy(desc(tags.usageCount))
       .limit(limit);
+    
+    // If we don't have enough trending tags, supplement with popular tags
+    if (trendingTags.length < limit) {
+      const trendingTagIds = trendingTags.map(tag => tag.id);
+      const popularTags = await db
+        .select()
+        .from(tags)
+        .where(
+          trendingTagIds.length > 0 
+            ? and(
+                eq(tags.trending, false),
+                not(inArray(tags.id, trendingTagIds))
+              )
+            : eq(tags.trending, false)
+        )
+        .orderBy(desc(tags.usageCount))
+        .limit(limit - trendingTags.length);
+      
+      return [...trendingTags, ...popularTags];
+    }
+    
+    return trendingTags;
   }
 
   // Tags

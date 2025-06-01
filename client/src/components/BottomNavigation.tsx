@@ -7,7 +7,7 @@ interface BottomNavigationProps {
 }
 
 export default function BottomNavigation({ onUploadClick }: BottomNavigationProps) {
-  const [location] = useLocation();
+  const [location, setLocation] = useLocation();
 
   const navItems = [
     { icon: Home, label: "Home", path: "/", active: location === "/" },
@@ -24,7 +24,7 @@ export default function BottomNavigation({ onUploadClick }: BottomNavigationProp
           <Button
             key={index}
             variant="ghost"
-            onClick={item.isUpload ? onUploadClick : undefined}
+            onClick={item.isUpload ? onUploadClick : item.path ? () => setLocation(item.path) : undefined}
             className={`flex flex-col items-center py-2 px-3 ${
               item.isUpload
                 ? "bg-tiktok-pink rounded-lg text-black hover:bg-tiktok-pink/80"

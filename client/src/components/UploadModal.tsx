@@ -13,13 +13,14 @@ import { extractHashtags } from "@/lib/utils";
 interface UploadModalProps {
   isOpen: boolean;
   onClose: () => void;
-  currentUserId?: number;
+  currentUserId?: string;
+  defaultHashtag?: string;
 }
 
-export default function UploadModal({ isOpen, onClose, currentUserId }: UploadModalProps) {
+export default function UploadModal({ isOpen, onClose, currentUserId, defaultHashtag }: UploadModalProps) {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
+  const [description, setDescription] = useState(defaultHashtag ? `#${defaultHashtag} ` : "");
   const [privacy, setPrivacy] = useState("public");
   const [musicName, setMusicName] = useState("");
   const { toast } = useToast();

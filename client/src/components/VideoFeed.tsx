@@ -1,24 +1,93 @@
 import { useRef, useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { VideoWithUser } from "@shared/schema";
 import VideoPlayer from "./VideoPlayer";
 
-interface VideoFeedProps {
-  currentUserId?: number;
+interface VideoWithUser {
+  id: number;
+  title: string;
+  description?: string | null;
+  videoUrl: string;
+  musicName?: string | null;
+  hashtags?: string[] | null;
+  isLiked?: boolean;
+  likesCount: number | null;
+  commentsCount: number | null;
+  sharesCount: number | null;
+  user: {
+    id: string;
+    username: string;
+    avatarUrl?: string | null;
+    firstName?: string | null;
+    lastName?: string | null;
+    profileImageUrl?: string | null;
+  };
+  isFollowing?: boolean;
 }
 
-export default function VideoFeed({ currentUserId }: VideoFeedProps) {
+interface VideoFeedProps {
+  currentUserId?: string;
+  showPublicOnly?: boolean;
+  hashtagFilter?: string;
+  videos?: VideoWithUser[];
+  randomMode?: boolean;
+}
+
+export default function VideoFeed({ currentUserId, showPublicOnly = false, hashtagFilter, videos: providedVideos, randomMode = false }: VideoFeedProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [currentVideoIndex, setCurrentVideoIndex] = useState(0);
   const [offset, setOffset] = useState(0);
   const limit = 10;
 
-  const { data: videos = [], isLoading } = useQuery<VideoWithUser[]>({
-    queryKey: [`/api/videos`, offset, currentUserId],
-    queryFn: () => 
-      fetch(`/api/videos?offset=${offset}&limit=${limit}${currentUserId ? `&userId=${currentUserId}` : ''}`)
-        .then(res => res.json()),
+  // Only fetch videos if no videos are provided
+  const { data: fetchedVideos = [], isLoading, error } = useQuery<VideoWithUser[]>({
+    queryKey: [`/api/videos`, offset, currentUserId, showPublicOnly, hashtagFilter, randomMode],
+    queryFn: async () => {
+      try {
+        // Use the random videos endpoint if randomMode is true
+        let url = randomMode 
+          ? `/api/videos/random?limit=${limit}` 
+          : `/api/videos?offset=${offset}&limit=${limit}`;
+        
+        if (currentUserId) {
+          url += `&userId=${currentUserId}`;
+        }
+        
+        if (showPublicOnly) {
+          url += '&publicOnly=true';
+        }
+        
+        if (hashtagFilter) {
+          url += `&hashtag=${hashtagFilter}`;
+        }
+        
+        console.log('Fetching videos from URL:', url);
+        
+        const response = await fetch(url, {
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Error fetching videos: ${response.statusText}`);
+        }
+        
+        const data = await response.json();
+        console.log('API response data:', data);
+        return data;
+      } catch (error) {
+        console.error('Error fetching videos:', error);
+        return [];
+      }
+    },
+    enabled: !providedVideos,
+    refetchOnWindowFocus: true,
+    staleTime: 30000 // 30 seconds
   });
+  
+  // Use provided videos if available, otherwise use fetched videos
+  const videos = providedVideos || fetchedVideos;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -75,7 +144,7 @@ export default function VideoFeed({ currentUserId }: VideoFeedProps) {
       container.removeEventListener('touchend', handleTouchEnd);
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [currentVideoIndex, videos.length]);
+  }, [currentVideoIndex, videos?.length]);
 
   // Intersection Observer for tracking current video
   useEffect(() => {
@@ -117,6 +186,17 @@ export default function VideoFeed({ currentUserId }: VideoFeedProps) {
         <div className="text-center">
           <div className="text-white text-xl mb-2">No videos found</div>
           <div className="text-tiktok-light-gray">Be the first to upload a video!</div>
+          {error && (
+            <div className="text-red-500 mt-4">
+              Error loading videos: {(error as Error).message}
+            </div>
+          )}
+          <button 
+            className="mt-4 bg-tiktok-red text-white px-4 py-2 rounded-full"
+            onClick={() => window.location.reload()}
+          >
+            Refresh Page
+          </button>
         </div>
       </div>
     );

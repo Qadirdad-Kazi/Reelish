@@ -24,7 +24,7 @@
   --ring: 348 100% 59%; /* #FE2C55 */
   --radius: 0.5rem;
   
-  /* TikTok specific colors */
+  /* Reelish specific colors */
   --tiktok-dark: 0 0% 0%; /* #000000 */
   --tiktok-gray: 214 27% 13%; /* #161823 */
   --tiktok-pink: 348 100% 59%; /* #FE2C55 */
@@ -56,7 +56,7 @@
 
 @layer base {
   * {
-    @apply border-border;
+    @apply border-[hsl(var(--border))];
   }
 
   body {

@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { storage } from "./storage";
-import { insertUserSchema } from "@shared/schema";
+import { insertUserSchema } from "./shared/schema";
 import { z } from "zod";
 import "./types";
 
@@ -17,7 +17,10 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   try {
     const user = await storage.getUserById(userId);
     if (!user) {
-      req.session = null;
+      // Instead of setting session to null, destroy it
+      req.session.destroy((err) => {
+        if (err) console.error('Error destroying session:', err);
+      });
       return res.status(401).json({ 
         message: "User not found. Please log in again." 
       });
@@ -59,7 +62,7 @@ export const loginSchema = z.object({
 export const registerSchema = insertUserSchema.extend({
   password: z.string().min(6, "Password must be at least 6 characters"),
   confirmPassword: z.string(),
-}).refine((data) => data.password === data.confirmPassword, {
+}).refine((data: { password: string; confirmPassword: string }) => data.password === data.confirmPassword, {
   message: "Passwords don't match",
   path: ["confirmPassword"],
 });

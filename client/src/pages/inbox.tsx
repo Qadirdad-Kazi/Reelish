@@ -69,27 +69,94 @@ export default function Inbox() {
   const queryClient = useQueryClient();
 
   // Fetch conversations
-  const { data: conversations = [], isLoading: loadingConversations } = useQuery({
+  const { data: conversations = [], isLoading: loadingConversations } = useQuery<Conversation[]>({
     queryKey: ['/api/conversations'],
-    enabled: activeTab === 'messages',
+    queryFn: async () => {
+      try {
+        const response = await fetch('/api/conversations', {
+          credentials: 'include'
+        });
+        
+        if (!response.ok) {
+          throw new Error('Failed to fetch conversations');
+        }
+        
+        return response.json();
+      } catch (error) {
+        console.error('Error fetching conversations:', error);
+        return [];
+      }
+    },
+    enabled: activeTab === 'messages' && !!user,
   });
 
   // Fetch messages for selected conversation
-  const { data: messages = [], isLoading: loadingMessages } = useQuery({
+  const { data: messages = [], isLoading: loadingMessages } = useQuery<Message[]>({
     queryKey: [`/api/conversations/${selectedConversation}/messages`],
+    queryFn: async () => {
+      try {
+        const response = await fetch(`/api/conversations/${selectedConversation}/messages`, {
+          credentials: 'include'
+        });
+        
+        if (!response.ok) {
+          throw new Error('Failed to fetch messages');
+        }
+        
+        return response.json();
+      } catch (error) {
+        console.error('Error fetching messages:', error);
+        return [];
+      }
+    },
     enabled: !!selectedConversation,
   });
 
   // Fetch notifications
-  const { data: notifications = [], isLoading: loadingNotifications } = useQuery({
+  const { data: notifications = [], isLoading: loadingNotifications } = useQuery<Notification[]>({
     queryKey: ['/api/notifications'],
-    enabled: activeTab === 'activity',
+    queryFn: async () => {
+      try {
+        const response = await fetch('/api/notifications', {
+          credentials: 'include'
+        });
+        
+        if (!response.ok) {
+          throw new Error('Failed to fetch notifications');
+        }
+        
+        return response.json();
+      } catch (error) {
+        console.error('Error fetching notifications:', error);
+        return [];
+      }
+    },
+    enabled: activeTab === 'activity' && !!user,
   });
 
   // Send message mutation
-  const sendMessageMutation = useMutation({
-    mutationFn: (data: { conversationId: number; content: string }) =>
-      apiRequest('/api/messages', 'POST', data),
+  const sendMessageMutation = useMutation<any, Error, { conversationId: number; content: string }>({
+    mutationFn: async (data: { conversationId: number; content: string }) => {
+      try {
+        const response = await fetch('/api/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(data),
+          credentials: 'include'
+        });
+        
+        if (!response.ok) {
+          throw new Error('Failed to send message');
+        }
+        
+        return response.json();
+      } catch (error) {
+        console.error('Error sending message:', error);
+        throw error;
+      }
+    },
     onSuccess: () => {
       setMessageText("");
       queryClient.invalidateQueries({ queryKey: [`/api/conversations/${selectedConversation}/messages`] });
@@ -105,9 +172,24 @@ export default function Inbox() {
   });
 
   // Mark notification as read
-  const markAsReadMutation = useMutation({
-    mutationFn: (notificationId: number) =>
-      apiRequest(`/api/notifications/${notificationId}/read`, 'PATCH'),
+  const markAsReadMutation = useMutation<any, Error, number>({
+    mutationFn: async (notificationId: number) => {
+      try {
+        const response = await fetch(`/api/notifications/${notificationId}/read`, {
+          method: 'PATCH',
+          credentials: 'include'
+        });
+        
+        if (!response.ok) {
+          throw new Error('Failed to mark notification as read');
+        }
+        
+        return response.json();
+      } catch (error) {
+        console.error('Error marking notification as read:', error);
+        throw error;
+      }
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['/api/notifications'] });
     },

@@ -68,7 +68,10 @@ export default function AuthModal({ isOpen, onClose, defaultTab = "login" }: Aut
   });
 
   const loginMutation = useMutation({
-    mutationFn: (data: LoginFormData) => apiRequest("/api/auth/login", "POST", data),
+    mutationFn: async (data: LoginFormData) => {
+      const response = await apiRequest("POST", "/api/auth/login", data);
+      return response.json();
+    },
     onSuccess: (data) => {
       toast({
         title: "Welcome back!",
@@ -87,16 +90,20 @@ export default function AuthModal({ isOpen, onClose, defaultTab = "login" }: Aut
   });
 
   const registerMutation = useMutation({
-    mutationFn: (data: RegisterFormData) => apiRequest("/api/auth/register", "POST", data),
+    mutationFn: async (data: RegisterFormData) => {
+      const response = await apiRequest("POST", "/api/auth/register", data);
+      return response.json();
+    },
     onSuccess: (data) => {
       toast({
-        title: "Welcome to TikTok!",
+        title: "Welcome to Reelish!",
         description: data.message || "Your account has been created successfully.",
       });
       queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
       onClose();
     },
     onError: (error: any) => {
+      console.error('Registration error:', error);
       toast({
         title: "Registration failed",
         description: error.message || "Please check your information and try again.",
@@ -118,7 +125,7 @@ export default function AuthModal({ isOpen, onClose, defaultTab = "login" }: Aut
       <DialogContent className="sm:max-w-[425px] bg-black border-gray-800">
         <DialogHeader>
           <DialogTitle className="text-white text-center text-2xl font-bold">
-            Join TikTok
+            Join Reelish
           </DialogTitle>
           <DialogDescription className="text-gray-400 text-center">
             Create an account or log in to start sharing videos
@@ -215,7 +222,7 @@ export default function AuthModal({ isOpen, onClose, defaultTab = "login" }: Aut
               <CardHeader className="pb-4">
                 <CardTitle className="text-white text-xl">Create account</CardTitle>
                 <CardDescription className="text-gray-400">
-                  Join millions of creators on TikTok
+                  Join millions of creators on Reelish
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">

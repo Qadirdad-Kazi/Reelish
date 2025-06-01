@@ -13,27 +13,28 @@ interface VideoPlayerProps {
   video: {
     id: number;
     title: string;
-    description?: string;
+    description?: string | null;
     videoUrl: string;
-    musicName?: string;
-    hashtags?: string[];
+    musicName?: string | null;
+    hashtags?: string[] | null;
     isLiked?: boolean;
-    likesCount: number;
-    commentsCount: number;
-    sharesCount: number;
+    likesCount: number | null;
+    commentsCount: number | null;
+    sharesCount: number | null;
     user: {
       id: string;
       username: string;
-      firstName?: string;
-      lastName?: string;
-      profileImageUrl?: string;
+      firstName?: string | null;
+      lastName?: string | null;
+      profileImageUrl?: string | null;
     };
     isFollowing?: boolean;
   };
   isActive?: boolean;
+  currentUserId?: string;
 }
 
-export default function VideoPlayer({ video, isActive = false }: VideoPlayerProps) {
+export default function VideoPlayer({ video, isActive = false, currentUserId }: VideoPlayerProps) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMuted, setIsMuted] = useState(true);
   const [showComments, setShowComments] = useState(false);
@@ -81,7 +82,7 @@ export default function VideoPlayer({ video, isActive = false }: VideoPlayerProp
     mutationFn: () => 
       isLiked 
         ? apiRequest(`/api/likes?videoId=${video.id}`, "DELETE")
-        : apiRequest("/api/likes", "POST", { videoId: video.id }),
+        : apiRequest("/api/likes", "POST", { videoId: video.id, userId: currentUserId }),
     onSuccess: () => {
       setIsLiked(!isLiked);
       setLikesCount(prev => isLiked ? prev - 1 : prev + 1);

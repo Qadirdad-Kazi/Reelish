@@ -67,7 +67,7 @@ export default function UploadPage() {
     onSuccess: (data) => {
       toast({
         title: "Video uploaded successfully! 🎉",
-        description: "Your video is now live on VibeShare!",
+        description: "Your video is now live on Reelish!",
       });
       queryClient.invalidateQueries({ queryKey: ["/api/videos"] });
       setLocation("/");
