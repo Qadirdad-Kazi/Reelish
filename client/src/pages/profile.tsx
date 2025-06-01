@@ -133,8 +133,8 @@ export default function Profile() {
         });
         
         if (!authCheckResponse.ok) {
-          console.error("Auth check failed:", authCheckResponse.status);
-          throw new Error("Authentication required");
+          console.error(`Auth check failed: ${authCheckResponse.status}`);
+          throw new Error('Authentication required');
         }
         
         // Use 'current' instead of the userId to ensure we're getting the authenticated user's likes
@@ -147,7 +147,7 @@ export default function Profile() {
         
         if (!response.ok) {
           const errorText = await response.text();
-          console.error("Liked videos error:", response.status, errorText);
+          console.error(`Failed to fetch liked videos: ${response.status} ${errorText}`);
           throw new Error(`Failed to fetch liked videos: ${response.status} ${errorText}`);
         }
         
@@ -164,24 +164,59 @@ export default function Profile() {
     retry: 1,
   });
   
+  // Fetch favorite/saved videos
+  const { data: favoriteVideosData, error: favoriteVideosError, isLoading: isFavoriteVideosLoading } = useQuery({
+    queryKey: [`user-${userId}-favorites`],
+    queryFn: async () => {
+      try {
+        console.log("Fetching favorite videos for user:", userId);
+        const response = await fetch(`/api/users/${userId}/favorites`, {
+          credentials: 'include'
+        });
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error(`Failed to fetch favorite videos: ${response.status} ${errorText}`);
+          throw new Error(`Failed to fetch favorite videos: ${response.status} ${errorText}`);
+        }
+        
+        const data = await response.json();
+        console.log("Favorite videos data:", data);
+        return data;
+      } catch (error) {
+        console.error("Error fetching favorite videos:", error);
+        throw error;
+      }
+    },
+    enabled: isAuthenticated && isOwnProfile,
+    staleTime: 1000 * 60 * 5, // 5 minutes
+    retry: 1,
+  });
+  
   useEffect(() => {
     if (videosData && Array.isArray(videosData) && videosData.length > 0 && isOwnProfile) {
       // Filter actual private videos from the user's videos
       const realPrivateVideos = videosData.filter(video => video.isPrivate === true);
       setPrivateVideos(realPrivateVideos);
-      
-      // Simulate saved videos (for demo purposes)
-      const publicVideosOnly = videosData.filter(video => video.isPrivate === false);
-      const mockSavedVideos = [...publicVideosOnly]
-        .sort(() => Math.random() - 0.5)
-        .slice(0, Math.max(1, Math.floor(publicVideosOnly.length / 4)))
-        .map((video: Video) => ({
-          ...video,
-          isSaved: true
-        }));
-      setSavedVideos(mockSavedVideos);
     }
   }, [videosData, isOwnProfile]);
+  
+  // Set favorite/saved videos from API data when available
+  useEffect(() => {
+    if (favoriteVideosData && Array.isArray(favoriteVideosData)) {
+      console.log("Setting favorite videos from API data:", favoriteVideosData);
+      setSavedVideos(favoriteVideosData);
+    }
+    
+    if (favoriteVideosError) {
+      console.error("Favorite videos error in useEffect:", favoriteVideosError);
+      toast({
+        title: "Error loading saved videos",
+        description: "Please try refreshing the page",
+        variant: "destructive"
+      });
+    }
+  }, [favoriteVideosData, favoriteVideosError, toast]);
   
   // Set liked videos from API data when available
   useEffect(() => {
@@ -831,7 +866,11 @@ export default function Profile() {
             {/* Saved Videos Tab - Only for own profile */}
             {activeTab === 'saved' && isOwnProfile && (
               <div className="mt-4">
-                {savedVideos.length === 0 ? (
+                {isFavoriteVideosLoading ? (
+                  <div className="flex justify-center py-8">
+                    <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                  </div>
+                ) : savedVideos.length === 0 ? (
                   <div className="text-center py-8">
                     <p className="text-muted-foreground">No saved videos</p>
                     <p className="text-xs text-muted-foreground mt-1">Videos you save will appear here</p>
@@ -858,14 +897,43 @@ export default function Profile() {
                         </div>
                         <div 
                           className="absolute top-1 right-1 p-1 bg-black/30 rounded-full" 
-                          onClick={(e) => {
+                          onClick={async (e) => {
                             e.stopPropagation();
-                            toast({
-                              title: "Unsaved",
-                              description: "Video removed from saved",
-                              duration: 3000
-                            });
-                            setSavedVideos(prev => prev.filter(v => v.id !== video.id));
+                            try {
+                              // Call the API to remove from favorites
+                              const response = await fetch(`/api/videos/${video.id}/favorite`, {
+                                method: 'DELETE',
+                                credentials: 'include',
+                                headers: {
+                                  'Content-Type': 'application/json'
+                                }
+                              });
+                              
+                              if (!response.ok) {
+                                throw new Error('Failed to remove from favorites');
+                              }
+                              
+                              // Remove from saved videos locally
+                              setSavedVideos(savedVideos.filter(v => v.id !== video.id));
+                              
+                              // Invalidate queries
+                              queryClient.invalidateQueries({ queryKey: ['favorites'] });
+                              queryClient.invalidateQueries({ queryKey: [`user-${userId}-favorites`] });
+                              
+                              toast({
+                                title: "Unsaved",
+                                description: "Video removed from saved",
+                                duration: 3000
+                              });
+                            } catch (error) {
+                              console.error('Error removing from favorites:', error);
+                              toast({
+                                title: "Error",
+                                description: "Failed to remove from saved videos",
+                                variant: "destructive",
+                                duration: 3000
+                              });
+                            }
                           }}
                         >
                           <Trash className="h-3 w-3 text-white" />

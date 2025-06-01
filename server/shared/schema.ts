@@ -312,7 +312,28 @@ export const videoFilters = pgTable("video_filters", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
-// Relations
+// Favorites/Saved videos
+export const favorites = pgTable("favorites", {
+  id: serial("id").primaryKey(),
+  userId: varchar("user_id").notNull(),
+  videoId: integer("video_id").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => {
+  return {
+    userVideoIdx: index("favorites_user_video_idx").on(table.userId, table.videoId).unique(),
+  };
+});
+
+// Zod schema for favorites     
+export const insertFavoriteSchema = z.object({
+  userId: z.string(),
+  videoId: z.number(),
+});
+
+export type InsertFavorite = z.infer<typeof insertFavoriteSchema>;
+export type Favorite = typeof favorites.$inferSelect;
+
+// Relations     
 export const usersRelations = relations(users, ({ many }) => ({
   videos: many(videos),
   comments: many(comments),
@@ -321,6 +342,7 @@ export const usersRelations = relations(users, ({ many }) => ({
   followingRelation: many(follows, { relationName: "following" }),
   notifications: many(notifications),
   videoViews: many(videoViews),
+  favorites: many(favorites),
 }));
 
 export const videosRelations = relations(videos, ({ one, many }) => ({
@@ -333,6 +355,7 @@ export const videosRelations = relations(videos, ({ one, many }) => ({
   views: many(videoViews),
   tags: many(videoTags),
   filters: many(videoFilters),
+  favorites: many(favorites),
 }));
 
 export const commentsRelations = relations(comments, ({ one, many }) => ({
@@ -364,6 +387,17 @@ export const likesRelations = relations(likes, ({ one }) => ({
   comment: one(comments, {
     fields: [likes.commentId],
     references: [comments.id],
+  }),
+}));
+
+export const favoritesRelations = relations(favorites, ({ one }) => ({
+  user: one(users, {
+    fields: [favorites.userId],
+    references: [users.id],
+  }),
+  video: one(videos, {
+    fields: [favorites.videoId],
+    references: [videos.id],
   }),
 }));
 
@@ -452,6 +486,7 @@ export type VideoWithUser = Video & {
   user: User;
   isLiked?: boolean;
   isFollowing?: boolean;
+  isFavorite?: boolean;
   tags?: Tag[];
   filters?: VideoFilter[];
 };

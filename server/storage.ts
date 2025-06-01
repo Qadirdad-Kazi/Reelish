@@ -1,9 +1,9 @@
 import { 
   users, videos, comments, likes, follows, videoViews, conversations, messages, 
-  notifications, tags, videoTags, trendingHashtags, passwordResetTokens,
-  type User, type Video, type Comment, type Like, type Follow,
+  notifications, tags, videoTags, trendingHashtags, passwordResetTokens, favorites,
+  type User, type Video, type Comment, type Like, type Follow, type Favorite,
   type InsertUser, type InsertVideo, type InsertComment, type InsertLike, type InsertFollow,
-  type VideoWithUser, type CommentWithUser, type UserWithStats, type InsertVideoView,
+  type InsertFavorite, type VideoWithUser, type CommentWithUser, type UserWithStats, type InsertVideoView,
   type InsertMessage, type InsertNotification, type Tag, type VideoView
 } from "./shared/schema";
 import { db } from "./db";
@@ -210,13 +210,20 @@ export class DatabaseStorage implements IStorage {
 
   // Videos
   async getVideo(id: number): Promise<Video | undefined> {
-    const [video] = await db
-      .select()
-      .from(videos)
-      .where(eq(videos.id, id))
-      .limit(1);
-    
-    return video;
+    try {
+      const [video] = await db
+        .select()
+        .from(videos)
+        .where(eq(videos.id, id));
+      return video;
+    } catch (error) {
+      console.error('Error getting video:', error);
+      return undefined;
+    }
+  }
+  
+  async getVideoById(id: number): Promise<Video | undefined> {
+    return this.getVideo(id);
   }
 
   async getVideoWithUser(id: number, currentUserId?: string): Promise<VideoWithUser | undefined> {
@@ -231,12 +238,14 @@ export class DatabaseStorage implements IStorage {
     
     const isLiked = currentUserId ? await this.isVideoLiked(currentUserId, id) : false;
     const isFollowing = currentUserId ? await this.isFollowing(currentUserId, result.users.id) : false;
+    const isFavorite = currentUserId ? await this.isFavorite(currentUserId, id) : false;
     
     return {
       ...result.videos,
       user: result.users,
       isLiked,
       isFollowing,
+      isFavorite,
     };
   }
 
@@ -269,8 +278,9 @@ export class DatabaseStorage implements IStorage {
             // Default values in case of errors
             let isLiked = false;
             let isFollowing = false;
+            let isFavorite = false;
             
-            // Only try to get like/follow status if we have a current user
+            // Only try to get like/follow/favorite status if we have a current user
             if (currentUserId) {
               try {
                 isLiked = await this.isVideoLiked(currentUserId, result.videos.id);
@@ -283,6 +293,12 @@ export class DatabaseStorage implements IStorage {
               } catch (followError) {
                 console.error(`Error checking follow status for user ${result.users.id}:`, followError);
               }
+              
+              try {
+                isFavorite = await this.isFavorite(currentUserId, result.videos.id);
+              } catch (favoriteError) {
+                console.error(`Error checking favorite status for video ${result.videos.id}:`, favoriteError);
+              }
             }
             
             return {
@@ -290,6 +306,7 @@ export class DatabaseStorage implements IStorage {
               user: result.users,
               isLiked,
               isFollowing,
+              isFavorite,
             };
           } catch (itemError) {
             console.error(`Error processing video ${result.videos.id}:`, itemError);
@@ -299,6 +316,7 @@ export class DatabaseStorage implements IStorage {
               user: result.users,
               isLiked: false,
               isFollowing: false,
+              isFavorite: false,
             };
           }
         })
@@ -326,12 +344,14 @@ export class DatabaseStorage implements IStorage {
     return Promise.all(results.map(async (result) => {
       const isLiked = currentUserId ? await this.isVideoLiked(currentUserId, result.videos.id) : false;
       const isFollowing = currentUserId ? await this.isFollowing(currentUserId, result.users.id) : false;
+      const isFavorite = currentUserId ? await this.isFavorite(currentUserId, result.videos.id) : false;
       
       return {
         ...result.videos,
         user: result.users,
         isLiked,
         isFollowing,
+        isFavorite,
       };
     }));
   }
@@ -349,12 +369,14 @@ export class DatabaseStorage implements IStorage {
     return Promise.all(results.map(async (result) => {
       const isLiked = currentUserId ? await this.isVideoLiked(currentUserId, result.videos.id) : false;
       const isFollowing = currentUserId ? await this.isFollowing(currentUserId, result.users.id) : false;
+      const isFavorite = currentUserId ? await this.isFavorite(currentUserId, result.videos.id) : false;
       
       return {
         ...result.videos,
         user: result.users,
         isLiked,
         isFollowing,
+        isFavorite,
       };
     }));
   }
@@ -372,12 +394,14 @@ export class DatabaseStorage implements IStorage {
     return Promise.all(results.map(async (result) => {
       const isLiked = currentUserId ? await this.isVideoLiked(currentUserId, result.videos.id) : false;
       const isFollowing = currentUserId ? await this.isFollowing(currentUserId, result.users.id) : false;
+      const isFavorite = currentUserId ? await this.isFavorite(currentUserId, result.videos.id) : false;
       
       return {
         ...result.videos,
         user: result.users,
         isLiked,
         isFollowing,
+        isFavorite,
       };
     }));
   }
@@ -933,12 +957,14 @@ export class DatabaseStorage implements IStorage {
     return Promise.all(results.map(async (result) => {
       const isLiked = currentUserId ? await this.isVideoLiked(currentUserId, result.videos.id) : false;
       const isFollowing = currentUserId ? await this.isFollowing(currentUserId, result.users.id) : false;
+      const isFavorite = currentUserId ? await this.isFavorite(currentUserId, result.videos.id) : false;
       
       return {
         ...result.videos,
         user: result.users,
         isLiked,
         isFollowing,
+        isFavorite,
       };
     }));
   }
@@ -1055,17 +1081,196 @@ export class DatabaseStorage implements IStorage {
     return [];
   }
 
-  // Notifications (basic implementation)
-  async createNotification(notification: InsertNotification): Promise<any> {
-    return null;
+  // Notifications implementation
+  async createNotification(data: {
+    userId: string;
+    type: string;
+    triggeredById?: string;
+    entityType?: string;
+    entityId?: string;
+    title: string;
+    message?: string;
+    read?: boolean;
+  }): Promise<any> {
+    try {
+      const [result] = await db.insert(notifications).values({
+        userId: data.userId,
+        type: data.type,
+        triggeredById: data.triggeredById || null,
+        entityType: data.entityType || null,
+        entityId: data.entityId || null,
+        title: data.title,
+        message: data.message || null,
+        read: data.read || false
+      }).returning();
+      return result;
+    } catch (error) {
+      console.error('Error creating notification:', error);
+      throw error;
+    }
   }
 
   async getUserNotifications(userId: string, offset = 0, limit = 20): Promise<any[]> {
-    return [];
+    try {
+      // Get notifications with user info for the triggeredBy field
+      const results = await db
+        .select({
+          notification: notifications,
+          triggeredBy: users,
+        })
+        .from(notifications)
+        .leftJoin(users, eq(notifications.triggeredById, users.id))
+        .where(eq(notifications.userId, userId))
+        .orderBy(desc(notifications.createdAt))
+        .limit(limit)
+        .offset(offset);
+
+      // Format the results
+      return results.map(({ notification, triggeredBy }) => ({
+        ...notification,
+        triggeredBy: triggeredBy ? {
+          id: triggeredBy.id,
+          username: triggeredBy.username,
+          profileImageUrl: triggeredBy.profileImageUrl,
+        } : undefined,
+      }));
+    } catch (error) {
+      console.error('Error getting user notifications:', error);
+      return [];
+    }
   }
 
   async markNotificationAsRead(notificationId: number, userId: string): Promise<boolean> {
-    return false;
+    try {
+      const result = await db
+        .update(notifications)
+        .set({ read: true })
+        .where(
+          and(
+            eq(notifications.id, notificationId),
+            eq(notifications.userId, userId)
+          )
+        );
+      
+      return result.rowCount !== null && result.rowCount > 0;
+    } catch (error) {
+      console.error('Error marking notification as read:', error);
+      return false;
+    }
+  }
+  
+  async markAllNotificationsAsRead(userId: string): Promise<boolean> {
+    try {
+      const result = await db
+        .update(notifications)
+        .set({ read: true })
+        .where(eq(notifications.userId, userId));
+      
+      return result.rowCount !== null && result.rowCount > 0;
+    } catch (error) {
+      console.error('Error marking all notifications as read:', error);
+      return false;
+    }
+  }
+
+  // Favorites/Saved Videos Methods
+  async addFavorite(favoriteData: InsertFavorite): Promise<Favorite | undefined> {
+    try {
+      // Check if already favorited
+      const existingFavorite = await db
+        .select()
+        .from(favorites)
+        .where(
+          and(
+            eq(favorites.userId, favoriteData.userId),
+            eq(favorites.videoId, favoriteData.videoId)
+          )
+        )
+        .limit(1);
+
+      if (existingFavorite.length > 0) {
+        return existingFavorite[0];
+      }
+
+      // Insert new favorite
+      const [favorite] = await db
+        .insert(favorites)
+        .values(favoriteData)
+        .returning();
+
+      return favorite;
+    } catch (error) {
+      console.error('Error adding favorite:', error);
+      return undefined;
+    }
+  }
+
+  async removeFavorite(userId: string, videoId: number): Promise<boolean> {
+    try {
+      const result = await db
+        .delete(favorites)
+        .where(
+          and(
+            eq(favorites.userId, userId),
+            eq(favorites.videoId, videoId)
+          )
+        );
+
+      return result.rowCount !== null && result.rowCount > 0;
+    } catch (error) {
+      console.error('Error removing favorite:', error);
+      return false;
+    }
+  }
+
+  async isFavorite(userId: string, videoId: number): Promise<boolean> {
+    try {
+      const [favorite] = await db
+        .select()
+        .from(favorites)
+        .where(
+          and(
+            eq(favorites.userId, userId),
+            eq(favorites.videoId, videoId)
+          )
+        )
+        .limit(1);
+
+      return !!favorite;
+    } catch (error) {
+      console.error('Error checking favorite status:', error);
+      return false;
+    }
+  }
+
+  async getUserFavorites(userId: string, limit: number = 20, offset: number = 0): Promise<any[]> {
+    try {
+      const favoriteVideos = await db
+        .select({
+          videos: videos,
+          users: users,
+          favoriteId: favorites.id,
+          favoriteCreatedAt: favorites.createdAt
+        })
+        .from(favorites)
+        .innerJoin(videos, eq(favorites.videoId, videos.id))
+        .innerJoin(users, eq(videos.userId, users.id))
+        .where(eq(favorites.userId, userId))
+        .orderBy(desc(favorites.createdAt))
+        .limit(limit)
+        .offset(offset);
+
+      return favoriteVideos.map(item => ({
+        ...item.videos,
+        user: item.users,
+        favoriteId: item.favoriteId,
+        favoriteCreatedAt: item.favoriteCreatedAt,
+        isFavorite: true
+      }));
+    } catch (error) {
+      console.error('Error getting user favorites:', error);
+      return [];
+    }
   }
 }
 

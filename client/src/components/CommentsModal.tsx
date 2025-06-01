@@ -4,8 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Heart, Send, MoreHorizontal, Reply, MessageCircle } from "lucide-react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { Link } from "wouter";
 
@@ -39,26 +38,59 @@ export default function CommentsModal({ isOpen, onClose, videoId, currentUserId 
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  const { data: comments = [], isLoading } = useQuery({
+  const { data: comments = [], isLoading } = useQuery<Comment[]>({
     queryKey: [`/api/videos/${videoId}/comments`],
     enabled: isOpen,
   });
 
   const createCommentMutation = useMutation({
-    mutationFn: (data: { content: string; parentId?: number }) => 
-      apiRequest("/api/comments", "POST", { videoId, content: data.content, parentId: data.parentId }),
-    onSuccess: () => {
+    mutationFn: async (data: { content: string; parentId?: number }) => {
+      // First check authentication status
+      const authCheckResponse = await fetch('/api/auth/me', {
+        credentials: "include"
+      });
+      
+      if (!authCheckResponse.ok) {
+        throw new Error("Authentication required");
+      }
+      
+      console.log("Posting comment with data:", { videoId, content: data.content, parentId: data.parentId });
+      
+      // Make the API request with proper credentials
+      const response = await fetch("/api/comments", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        credentials: "include",
+        body: JSON.stringify({ videoId, content: data.content, parentId: data.parentId })
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("Comment posting error:", response.status, errorText);
+        throw new Error(`Failed to post comment: ${response.status} ${errorText}`);
+      }
+      
+      return await response.json();
+    },
+    onSuccess: (data) => {
+      console.log("Comment posted successfully:", data);
       setNewComment("");
       setReplyText("");
       setReplyTo(null);
+      
+      // Invalidate queries to refresh the comments list
       queryClient.invalidateQueries({ queryKey: [`/api/videos/${videoId}/comments`] });
       queryClient.invalidateQueries({ queryKey: ["/api/videos"] });
+      
       toast({
         title: "Comment posted!",
         description: "Your comment has been added.",
       });
     },
-    onError: () => {
+    onError: (error) => {
+      console.error("Comment posting error:", error);
       toast({
         title: "Error",
         description: "Failed to post comment. Please try again.",
@@ -68,26 +100,130 @@ export default function CommentsModal({ isOpen, onClose, videoId, currentUserId 
   });
 
   const likeCommentMutation = useMutation({
-    mutationFn: (commentId: number) => {
+    mutationFn: async (commentId: number) => {
+      // First check authentication status
+      const authCheckResponse = await fetch('/api/auth/me', {
+        credentials: "include"
+      });
+      
+      if (!authCheckResponse.ok) {
+        throw new Error("Authentication required");
+      }
+      
       const comment = comments.find((c: Comment) => c.id === commentId);
-      return comment?.isLiked 
-        ? apiRequest(`/api/likes?commentId=${commentId}`, "DELETE")
-        : apiRequest("/api/likes", "POST", { commentId });
+      
+      if (comment?.isLiked) {
+        console.log("Unliking comment:", commentId);
+        // Unlike the comment
+        const response = await fetch(`/api/likes?commentId=${commentId}`, {
+          method: "DELETE",
+          credentials: "include"
+        });
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error("Unlike comment error:", response.status, errorText);
+          throw new Error(`Failed to unlike comment: ${response.status} ${errorText}`);
+        }
+        
+        return await response.json();
+      } else {
+        console.log("Liking comment:", commentId);
+        // Like the comment
+        const response = await fetch("/api/likes", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          credentials: "include",
+          body: JSON.stringify({ commentId })
+        });
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error("Like comment error:", response.status, errorText);
+          throw new Error(`Failed to like comment: ${response.status} ${errorText}`);
+        }
+        
+        return await response.json();
+      }
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
+      console.log("Like/unlike comment successful:", data);
       queryClient.invalidateQueries({ queryKey: [`/api/videos/${videoId}/comments`] });
+    },
+    onError: (error) => {
+      console.error("Like comment error:", error);
+      toast({
+        title: "Error",
+        description: "Failed to like comment. Please try again.",
+        variant: "destructive",
+      });
     },
   });
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newComment.trim()) return;
-    createCommentMutation.mutate({ content: newComment });
+    
+    console.log("Submitting new comment with text:", newComment);
+    
+    // Make sure we're authenticated before submitting the comment
+    fetch('/api/auth/me', { credentials: "include" })
+      .then(res => {
+        if (!res.ok) {
+          toast({
+            title: "Authentication required",
+            description: "Please log in to post comments",
+            variant: "destructive",
+          });
+          return;
+        }
+        
+        // Submit the comment
+        createCommentMutation.mutate({ content: newComment });
+      })
+      .catch(error => {
+        console.error("Auth check error:", error);
+        toast({
+          title: "Error",
+          description: "Failed to authenticate. Please try again.",
+          variant: "destructive",
+        });
+      });
   };
 
   const handleReply = (commentId: number) => {
     if (!replyText.trim()) return;
-    createCommentMutation.mutate({ content: replyText, parentId: commentId });
+    
+    console.log("Submitting reply to comment ID:", commentId, "with text:", replyText);
+    
+    // Make sure we're authenticated before submitting the reply
+    fetch('/api/auth/me', { credentials: "include" })
+      .then(res => {
+        if (!res.ok) {
+          toast({
+            title: "Authentication required",
+            description: "Please log in to reply to comments",
+            variant: "destructive",
+          });
+          return;
+        }
+        
+        // Submit the reply
+        createCommentMutation.mutate({ 
+          content: replyText, 
+          parentId: commentId 
+        });
+      })
+      .catch(error => {
+        console.error("Auth check error:", error);
+        toast({
+          title: "Error",
+          description: "Failed to authenticate. Please try again.",
+          variant: "destructive",
+        });
+      });
   };
 
   const formatTimeAgo = (dateString: string) => {
@@ -99,6 +235,11 @@ export default function CommentsModal({ isOpen, onClose, videoId, currentUserId 
     if (diffInMinutes < 60) return `${diffInMinutes}m ago`;
     if (diffInMinutes < 1440) return `${Math.floor(diffInMinutes / 60)}h ago`;
     return `${Math.floor(diffInMinutes / 1440)}d ago`;
+  };
+
+  const handleLikeComment = (e: React.MouseEvent, commentId: number) => {
+    e.preventDefault();
+    likeCommentMutation.mutate(commentId);
   };
 
   const renderComment = (comment: Comment, isReply = false) => (
@@ -127,7 +268,8 @@ export default function CommentsModal({ isOpen, onClose, videoId, currentUserId 
             className={`flex items-center space-x-1 hover:text-red-500 transition-colors ${
               comment.isLiked ? 'text-red-500' : 'text-gray-400'
             }`}
-            onClick={() => likeCommentMutation.mutate(comment.id)}
+            onClick={(e) => handleLikeComment(e, comment.id)}
+            type="button"
           >
             <Heart className={`w-4 h-4 ${comment.isLiked ? 'fill-current' : ''}`} />
             <span className="text-xs">{comment.likesCount || 0}</span>
@@ -136,6 +278,7 @@ export default function CommentsModal({ isOpen, onClose, videoId, currentUserId 
             <button 
               className="text-gray-400 hover:text-white text-xs flex items-center space-x-1"
               onClick={() => setReplyTo(replyTo === comment.id ? null : comment.id)}
+              type="button"
             >
               <Reply className="w-3 h-3" />
               <span>Reply</span>

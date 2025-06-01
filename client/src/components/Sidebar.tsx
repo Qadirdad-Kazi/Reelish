@@ -1,4 +1,4 @@
-import { Home, Compass, User, Music } from "lucide-react";
+import { Home, Compass, User, Music, Inbox } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useLocation } from "wouter";
 
@@ -8,6 +8,7 @@ export default function Sidebar() {
   const navItems = [
     { icon: Home, path: "/", active: location === "/", label: "Home" },
     { icon: Compass, path: "/discover", active: location === "/discover", label: "Discover" },
+    { icon: Inbox, path: "/inbox", active: location === "/inbox", label: "Inbox" },
     { icon: User, path: "/profile", active: location.startsWith("/profile"), label: "Profile" },
   ];
 

@@ -1,8 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { Heart, MessageCircle, Share, Music, MoreHorizontal, Play, VolumeX, Volume2 } from "lucide-react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { Heart, MessageCircle, Share, Music, Play, VolumeX, Volume2, Bookmark } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import CommentsModal from "./CommentsModal";
@@ -18,6 +17,7 @@ interface VideoPlayerProps {
     musicName?: string | null;
     hashtags?: string[] | null;
     isLiked?: boolean;
+    isFavorite?: boolean;
     likesCount: number | null;
     commentsCount: number | null;
     sharesCount: number | null;
@@ -38,7 +38,7 @@ export default function VideoPlayer({ video, isActive = false }: VideoPlayerProp
   const [isMuted, setIsMuted] = useState(false); // Set to false for sound on by default
   const [showComments, setShowComments] = useState(false);
   const [isLiked, setIsLiked] = useState(video.isLiked || false);
-  const [likesCount, setLikesCount] = useState(video.likesCount || 0);
+  const [isFavorite, setIsFavorite] = useState(video.isFavorite || false);
   const [isFollowing, setIsFollowing] = useState(video.isFollowing || false);
   const [videoError, setVideoError] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -129,133 +129,198 @@ export default function VideoPlayer({ video, isActive = false }: VideoPlayerProp
     setIsMuted(videoElement.muted);
   };
 
-  const likeMutation = useMutation({
-    mutationFn: async () => {
-      try {
-        console.log(`${isLiked ? 'Unliking' : 'Liking'} video:`, video.id);
-        
-        // Make sure we're authenticated before liking
-        if (!user) {
-          throw new Error("You must be logged in to like videos");
-        }
-        
-        const endpoint = isLiked 
-          ? `/api/likes?videoId=${video.id}`
-          : "/api/likes";
-        
-        const method = isLiked ? "DELETE" : "POST";
-        const body = isLiked ? undefined : { videoId: video.id };
-        
-        console.log(`Making ${method} request to ${endpoint}`, body);
-        
-        const response = await apiRequest(method, endpoint, body);
-        console.log('Like response:', response);
-        return response;
-      } catch (error) {
-        console.error('Error in like mutation:', error);
-        throw error;
-      }
-    },
-    onSuccess: () => {
-      const newLikeStatus = !isLiked;
-      console.log(`Video ${video.id} like status changed to:`, newLikeStatus);
-      
-      setIsLiked(newLikeStatus);
-      setLikesCount(prev => isLiked ? prev - 1 : prev + 1);
-      
-      // Show toast confirmation
-      toast({
-        title: newLikeStatus ? "Liked!" : "Unliked",
-        description: newLikeStatus ? "Video added to your likes" : "Video removed from your likes",
-      });
-      
-      // Invalidate videos queries
-      queryClient.invalidateQueries({ queryKey: ["/api/videos"] });
-      
-      // Invalidate liked videos queries to update the likes tab
-      if (user) {
-        console.log(`Invalidating liked videos for user ${user.id}`);
-        queryClient.invalidateQueries({ queryKey: [`user-liked-videos-${user.id}`] });
-      }
-    },
-    onError: (error) => {
-      console.error('Like mutation error:', error);
-      toast({
-        title: "Error",
-        description: error.message || "Failed to update like",
-        variant: "destructive",
-      });
-    },
-  });
+  // State for likes count
+  const [likesCount, setLikesCount] = useState<number>(video.likesCount || 0);
 
-  const handleLike = async () => {
-    if (!user) {
-      toast({
-        title: "Authentication required",
-        description: "Please log in to like videos",
-        variant: "destructive",
-      });
-      return;
-    }
-    
+  // Like video functionality with proper authentication check
+  const likeVideo = async () => {
     try {
-      // First check if we're authenticated
-      const authCheckResponse = await fetch('/api/auth/me', {
-        credentials: "include"
+      // Check authentication first
+      const authResponse = await fetch('/api/auth/me', {
+        credentials: 'include'
       });
       
-      if (!authCheckResponse.ok) {
+      if (!authResponse.ok) {
         toast({
           title: "Authentication required",
-          description: "Please log in to like videos",
-          variant: "destructive",
+          description: "Please sign in to like videos",
+          variant: "destructive"
         });
         return;
       }
+
+      // Toggle like state optimistically
+      const newLikedState = !isLiked;
+      setIsLiked(newLikedState);
+      setLikesCount((prev: number) => newLikedState ? prev + 1 : prev - 1);
       
-      // Proceed with the like mutation
-      likeMutation.mutate();
-      
-      // Force refresh of liked videos in profile page
-      setTimeout(() => {
-        if (user) {
-          // Include the user ID in the query key to match the profile page
-          queryClient.invalidateQueries({ queryKey: [`user-liked-videos-${user.id}`] });
-          // Also invalidate the current user endpoint
-          queryClient.invalidateQueries({ queryKey: [`user-liked-videos-current`] });
+      // Make API call
+      const response = await fetch(`/api/videos/${video.id}/like`, {
+        method: newLikedState ? 'POST' : 'DELETE',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json'
         }
-      }, 500);
+      });
+      
+      if (!response.ok) {
+        // Revert on error
+        setIsLiked(!newLikedState);
+        setLikesCount((prev: number) => !newLikedState ? prev + 1 : prev - 1);
+        
+        toast({
+          title: "Error",
+          description: "Failed to update like status",
+          variant: "destructive"
+        });
+      } else {
+        // Invalidate queries
+        queryClient.invalidateQueries({ queryKey: ['video', video.id] });
+        queryClient.invalidateQueries({ queryKey: ['videos'] });
+      }
     } catch (error) {
-      console.error("Error checking authentication:", error);
+      console.error("Like error:", error);
       toast({
         title: "Error",
-        description: "Failed to like video. Please try again.",
-        variant: "destructive",
+        description: "Something went wrong",
+        variant: "destructive"
       });
     }
   };
 
-  const followMutation = useMutation({
-    mutationFn: () => 
-      isFollowing 
-        ? apiRequest("DELETE", `/api/follows/${video.user.id}`)
-        : apiRequest("POST", "/api/follows", { followingId: video.user.id }),
-    onSuccess: () => {
-      setIsFollowing(!isFollowing);
-      toast({
-        title: isFollowing ? "Unfollowed" : "Following",
-        description: `You ${isFollowing ? "unfollowed" : "are now following"} @${video.user.username}`,
+  const toggleFavorite = async () => {
+    try {
+      // Check authentication first
+      const authResponse = await fetch('/api/auth/me', {
+        credentials: 'include'
       });
-      queryClient.invalidateQueries({ queryKey: ["/api/videos"] });
-    },
-    onError: () => {
+      
+      if (!authResponse.ok) {
+        toast({
+          title: "Authentication required",
+          description: "Please sign in to save videos",
+          variant: "destructive"
+        });
+        return;
+      }
+      
+      const newFavoriteState = !isFavorite;
+      setIsFavorite(newFavoriteState);
+      
+      // Make API call
+      const response = await fetch(`/api/videos/${video.id}/favorite`, {
+        method: newFavoriteState ? 'POST' : 'DELETE',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      if (!response.ok) {
+        // Revert on error
+        setIsFavorite(!newFavoriteState);
+        
+        toast({
+          title: "Error",
+          description: "Failed to update favorite status",
+          variant: "destructive"
+        });
+      } else {
+        // Invalidate queries
+        queryClient.invalidateQueries({ queryKey: ['video', video.id] });
+        queryClient.invalidateQueries({ queryKey: ['videos'] });
+        queryClient.invalidateQueries({ queryKey: ['favorites'] });
+        
+        toast({
+          title: newFavoriteState ? "Saved" : "Removed",
+          description: newFavoriteState ? "Video saved to your profile" : "Video removed from saved",
+          variant: "default"
+        });
+      }
+    } catch (error) {
+      console.error("Favorite error:", error);
       toast({
         title: "Error",
-        description: "Please log in to follow users",
-        variant: "destructive",
+        description: "Something went wrong",
+        variant: "destructive"
       });
-    },
-  });
+    }
+  };
+
+  const followUser = async () => {
+    try {
+      // Check authentication first
+      const authResponse = await fetch('/api/auth/me', {
+        credentials: 'include'
+      });
+      
+      if (!authResponse.ok) {
+        toast({
+          title: "Authentication required",
+          description: "Please sign in to follow users",
+          variant: "destructive"
+        });
+        return;
+      }
+
+      // Toggle follow state optimistically
+      const newFollowStatus = !isFollowing;
+      setIsFollowing(newFollowStatus);
+      
+      // Make API call
+      let response;
+      if (newFollowStatus) {
+        // Follow user
+        response = await fetch('/api/follows', {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ followingId: video.user.id })
+        });
+      } else {
+        // Unfollow user
+        response = await fetch(`/api/follows/${video.user.id}`, {
+          method: 'DELETE',
+          credentials: 'include'
+        });
+      }
+      
+      if (!response.ok) {
+        // Revert on error
+        setIsFollowing(!newFollowStatus);
+        
+        toast({
+          title: "Error",
+          description: "Failed to update follow status",
+          variant: "destructive"
+        });
+      } else {
+        toast({
+          title: newFollowStatus ? "Following!" : "Unfollowed",
+          description: newFollowStatus ? `You are now following ${video.user.username}` : `You unfollowed ${video.user.username}`,
+        });
+        // Invalidate all relevant queries
+        queryClient.invalidateQueries({ queryKey: ['videos'] });
+        // Invalidate follow status queries
+        queryClient.invalidateQueries({ queryKey: ['/api/follows'] });
+        // Invalidate profile queries that might contain follow counts
+        queryClient.invalidateQueries({ queryKey: ['/api/users'] });
+        // Invalidate any specific follow status queries
+        if (video.user && video.user.id) {
+          queryClient.invalidateQueries({ queryKey: [`follow-status-${video.user.id}`] });
+        }
+      }
+    } catch (error) {
+      console.error("Follow error:", error);
+      toast({
+        title: "Error",
+        description: "Something went wrong",
+        variant: "destructive"
+      });
+    }
+  };
 
   const createVideoWithMusic = () => {
     if (!video.musicName) return;
@@ -268,13 +333,47 @@ export default function VideoPlayer({ video, isActive = false }: VideoPlayerProp
     window.location.href = `/upload?music=${encodeURIComponent(video.musicName)}`;
   };
 
+  const [showShareOptions, setShowShareOptions] = useState(false);
+
   const shareVideo = () => {
+    // Toggle share options dropdown
+    setShowShareOptions(!showShareOptions);
+  };
+
+  const copyLink = () => {
     const url = `${window.location.origin}/video/${video.id}`;
     navigator.clipboard.writeText(url);
     toast({
       title: "Link copied!",
       description: "Video link copied to clipboard",
     });
+    setShowShareOptions(false);
+  };
+
+  const shareToSocial = (platform: string) => {
+    const url = encodeURIComponent(`${window.location.origin}/video/${video.id}`);
+    const text = encodeURIComponent(`Check out this video on Reelish: ${video.description?.substring(0, 50)}${video.description && video.description.length > 50 ? '...' : ''}`);
+    let shareUrl = '';
+    
+    switch (platform) {
+      case 'twitter':
+        shareUrl = `https://twitter.com/intent/tweet?text=${text}&url=${url}`;
+        break;
+      case 'facebook':
+        shareUrl = `https://www.facebook.com/sharer/sharer.php?u=${url}`;
+        break;
+      case 'whatsapp':
+        shareUrl = `https://api.whatsapp.com/send?text=${text} ${url}`;
+        break;
+      case 'telegram':
+        shareUrl = `https://t.me/share/url?url=${url}&text=${text}`;
+        break;
+      default:
+        return;
+    }
+    
+    window.open(shareUrl, '_blank', 'width=600,height=400');
+    setShowShareOptions(false);
   };
 
   const formatCount = (count: number) => {
@@ -390,8 +489,7 @@ export default function VideoPlayer({ video, isActive = false }: VideoPlayerProp
                 size="sm"
                 variant={isFollowing ? "outline" : "default"}
                 className={isFollowing ? "border-white text-white hover:bg-white hover:text-black" : "bg-pink-600 hover:bg-pink-700 text-white"}
-                onClick={() => followMutation.mutate()}
-                disabled={followMutation.isPending}
+                onClick={followUser}
               >
                 {isFollowing ? "Following" : "Follow"}
               </Button>
@@ -431,54 +529,102 @@ export default function VideoPlayer({ video, isActive = false }: VideoPlayerProp
       </div>
 
       {/* Action Buttons */}
-      <div className="absolute right-4 bottom-20 flex flex-col space-y-4">
-        <Button
-          size="lg"
-          variant="ghost"
-          className={`rounded-full ${isLiked ? 'text-red-500' : 'text-white'} hover:scale-110 transition-transform`}
-          onClick={handleLike}
+      <div className="absolute bottom-16 right-0 flex flex-col items-center space-y-4">
+        <button
+          className="bg-transparent text-white p-2 rounded-full hover:bg-gray-800 transition-colors"
+          onClick={likeVideo}
         >
-          <Heart className={`w-8 h-8 ${isLiked ? 'fill-current' : ''}`} />
+          <Heart className={`w-8 h-8 ${isLiked ? 'fill-red-500 text-red-500' : ''}`} />
           <span className="sr-only">Like</span>
-        </Button>
-        <span className="text-white text-sm text-center font-medium">
-          {formatCount(likesCount)}
-        </span>
+        </button>
+        <span className="text-white text-xs">{formatCount(likesCount)}</span>
 
-        <Button
-          size="lg"
-          variant="ghost"
-          className="rounded-full text-white hover:scale-110 transition-transform"
+        <button
+          className="bg-transparent text-white p-2 rounded-full hover:bg-gray-800 transition-colors"
           onClick={() => setShowComments(true)}
         >
           <MessageCircle className="w-8 h-8" />
           <span className="sr-only">Comment</span>
-        </Button>
-        <span className="text-white text-sm text-center font-medium">
-          {formatCount(video.commentsCount || 0)}
-        </span>
+        </button>
+        <span className="text-white text-xs">{formatCount(video.commentsCount || 0)}</span>
 
-        <Button
-          size="lg"
-          variant="ghost"
-          className="rounded-full text-white hover:scale-110 transition-transform"
-          onClick={shareVideo}
-        >
-          <Share className="w-8 h-8" />
-          <span className="sr-only">Share</span>
-        </Button>
-        <span className="text-white text-sm text-center font-medium">
-          {formatCount(video.sharesCount || 0)}
-        </span>
-
-        <Button
-          size="lg"
-          variant="ghost"
-          className="rounded-full text-white hover:scale-110 transition-transform"
-        >
-          <MoreHorizontal className="w-8 h-8" />
-          <span className="sr-only">More</span>
-        </Button>
+        <div className="relative">
+          <button
+            className="bg-transparent text-white p-2 rounded-full hover:bg-gray-800 transition-colors"
+            onClick={shareVideo}
+          >
+            <Share className="w-8 h-8" />
+            <span className="sr-only">Share</span>
+          </button>
+          <span className="text-white text-xs">{formatCount(video.sharesCount || 0)}</span>
+          
+          {showShareOptions && (
+            <div className="absolute right-12 bottom-0 bg-gray-900 rounded-lg shadow-lg p-3 w-48 z-50 border border-gray-700">
+              <div className="flex flex-col space-y-2">
+                <button 
+                  onClick={copyLink}
+                  className="flex items-center space-x-2 text-white hover:bg-gray-800 p-2 rounded-md transition-colors"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                  </svg>
+                  <span className="text-sm">Copy Link</span>
+                </button>
+                
+                <button 
+                  onClick={() => shareToSocial('twitter')}
+                  className="flex items-center space-x-2 text-white hover:bg-gray-800 p-2 rounded-md transition-colors"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-blue-400" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M23.953 4.57a10 10 0 01-2.825.775 4.958 4.958 0 002.163-2.723 10.1 10.1 0 01-3.127 1.184 4.92 4.92 0 00-8.384 4.482C7.69 8.095 4.067 6.13 1.64 3.162a4.822 4.822 0 00-.666 2.475c0 1.71.87 3.213 2.188 4.096a4.904 4.904 0 01-2.228-.616v.06a4.923 4.923 0 003.946 4.827 4.996 4.996 0 01-2.212.085 4.936 4.936 0 004.604 3.417 9.867 9.867 0 01-6.102 2.105c-.39 0-.779-.023-1.17-.067a13.995 13.995 0 007.557 2.209c9.053 0 13.998-7.496 13.998-13.985 0-.21 0-.42-.015-.63A9.935 9.935 0 0024 4.59z" />
+                  </svg>
+                  <span className="text-sm">Twitter</span>
+                </button>
+                
+                <button 
+                  onClick={() => shareToSocial('facebook')}
+                  className="flex items-center space-x-2 text-white hover:bg-gray-800 p-2 rounded-md transition-colors"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-blue-600" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z" />
+                  </svg>
+                  <span className="text-sm">Facebook</span>
+                </button>
+                
+                <button 
+                  onClick={() => shareToSocial('whatsapp')}
+                  className="flex items-center space-x-2 text-white hover:bg-gray-800 p-2 rounded-md transition-colors"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-green-500" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
+                  </svg>
+                  <span className="text-sm">WhatsApp</span>
+                </button>
+                
+                <button 
+                  onClick={() => shareToSocial('telegram')}
+                  className="flex items-center space-x-2 text-white hover:bg-gray-800 p-2 rounded-md transition-colors"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-blue-500" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z" />
+                  </svg>
+                  <span className="text-sm">Telegram</span>
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+        
+        <div className="relative mt-4">
+          <button
+            className="bg-transparent text-white p-2 rounded-full hover:bg-gray-800 transition-colors"
+            onClick={toggleFavorite}
+          >
+            <Bookmark className={`w-8 h-8 ${isFavorite ? 'fill-yellow-500 text-yellow-500' : ''}`} />
+            <span className="sr-only"></span>
+          </button>
+          <span className="text-white text-xs"></span>
+        </div>
 
         {/* Music Icon for Creating with Sound */}
         {video.musicName && (

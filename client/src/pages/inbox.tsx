@@ -194,6 +194,41 @@ export default function Inbox() {
       queryClient.invalidateQueries({ queryKey: ['/api/notifications'] });
     },
   });
+  
+  // Mark all notifications as read
+  const markAllAsReadMutation = useMutation<any, Error, void>({
+    mutationFn: async () => {
+      try {
+        const response = await fetch('/api/notifications/read-all', {
+          method: 'PATCH',
+          credentials: 'include'
+        });
+        
+        if (!response.ok) {
+          throw new Error('Failed to mark all notifications as read');
+        }
+        
+        return response.json();
+      } catch (error) {
+        console.error('Error marking all notifications as read:', error);
+        throw error;
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/notifications'] });
+      toast({
+        title: "Success",
+        description: "All notifications marked as read",
+      });
+    },
+    onError: () => {
+      toast({
+        title: "Error",
+        description: "Failed to mark all notifications as read",
+        variant: "destructive",
+      });
+    },
+  });
 
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault();
@@ -442,8 +477,22 @@ export default function Inbox() {
           {/* Activity Tab */}
           {activeTab === 'activity' && (
             <Card className="bg-gray-900 border-gray-800">
-              <CardHeader>
+              <CardHeader className="flex flex-row items-center justify-between">
                 <CardTitle className="text-white">Activity</CardTitle>
+                {notifications.length > 0 && notifications.some(n => !n.read) && (
+                  <Button 
+                    size="sm" 
+                    variant="outline" 
+                    className="text-xs border-gray-700 hover:bg-gray-800"
+                    onClick={() => markAllAsReadMutation.mutate()}
+                    disabled={markAllAsReadMutation.isPending}
+                  >
+                    {markAllAsReadMutation.isPending ? (
+                      <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-pink-500 mr-1"></div>
+                    ) : null}
+                    Mark all as read
+                  </Button>
+                )}
               </CardHeader>
               <CardContent>
                 <ScrollArea className="h-[600px]">

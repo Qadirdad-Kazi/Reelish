@@ -631,6 +631,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
       
       const comment = await dbStorage.createComment(commentData);
+      
+      // Create notification for the video owner if it's a different user
+      // Use type assertion to access videoId and content
+      const typedCommentData = commentData as { videoId?: number; content: string };
+      
+      if (typedCommentData.videoId) {
+        // Get the video to find its owner
+        const video = await dbStorage.getVideoById(typedCommentData.videoId);
+        if (video && video.userId !== req.user!.id) {
+          // Create a notification for the video owner
+          await dbStorage.createNotification({
+            userId: video.userId,
+            type: 'comment',
+            triggeredById: req.user!.id,
+            entityType: 'video',
+            entityId: typedCommentData.videoId.toString(),
+            title: 'New Comment',
+            message: `@${req.user!.username} commented on your video: "${typedCommentData.content.substring(0, 50)}${typedCommentData.content.length > 50 ? '...' : ''}"`
+          });
+        }
+      }
+      
       res.status(201).json({ 
         message: "Comment posted!", 
         comment 
@@ -675,6 +697,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
       
       const like = await dbStorage.createLike(likeData);
+      
+      // Create notification for the video owner if it's a different user
+      // Use type assertion to access videoId
+      const typedLikeData = likeData as { videoId?: number };
+      
+      if (typedLikeData.videoId) {
+        // Get the video to find its owner
+        const video = await dbStorage.getVideoById(typedLikeData.videoId);
+        if (video && video.userId !== req.user!.id) {
+          // Create a notification for the video owner
+          await dbStorage.createNotification({
+            userId: video.userId,
+            type: 'like',
+            triggeredById: req.user!.id,
+            entityType: 'video',
+            entityId: typedLikeData.videoId.toString(),
+            title: 'New Like',
+            message: `@${req.user!.username} liked your video`
+          });
+        }
+      }
+      
       res.status(201).json({ 
         message: "Liked!", 
         like 
@@ -863,6 +907,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Use type assertion to satisfy TypeScript
       const follow = await dbStorage.createFollow(followData as any);
+      
+      // Create notification for the user being followed
+      try {
+        // Get the user who is following
+        const follower = await dbStorage.getUserById(followData.followerId);
+        
+        // Create a notification for the user being followed
+        await dbStorage.createNotification({
+          userId: followData.followingId,
+          type: 'follow',
+          triggeredById: followData.followerId,
+          entityType: 'user',
+          entityId: followData.followerId,
+          title: 'New Follower',
+          message: `@${follower?.username || 'Someone'} started following you`
+        });
+      } catch (notifError) {
+        console.error('Error creating follow notification:', notifError);
+        // Continue with the response even if notification creation fails
+      }
+      
       res.status(201).json({ 
         message: "Now following!", 
         follow 
@@ -893,6 +958,52 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Delete follow error:", error);
       res.status(500).json({ message: "Failed to unfollow user" });
+    }
+  });
+
+  // Notification Routes
+  app.get('/api/notifications', requireAuth, async (req, res) => {
+    try {
+      const userId = req.user!.id;
+      const offset = parseInt(req.query.offset as string) || 0;
+      const limit = parseInt(req.query.limit as string) || 20;
+      
+      const notifications = await dbStorage.getUserNotifications(userId, offset, limit);
+      res.json(notifications);
+    } catch (error) {
+      console.error('Error fetching notifications:', error);
+      res.status(500).json({ message: 'Failed to fetch notifications' });
+    }
+  });
+
+  app.patch('/api/notifications/:id/read', requireAuth, async (req, res) => {
+    try {
+      const notificationId = parseInt(req.params.id);
+      const userId = req.user!.id;
+      
+      const success = await dbStorage.markNotificationAsRead(notificationId, userId);
+      
+      if (!success) {
+        return res.status(404).json({ message: 'Notification not found' });
+      }
+      
+      res.json({ message: 'Notification marked as read' });
+    } catch (error) {
+      console.error('Error marking notification as read:', error);
+      res.status(500).json({ message: 'Failed to mark notification as read' });
+    }
+  });
+
+  app.patch('/api/notifications/read-all', requireAuth, async (req, res) => {
+    try {
+      const userId = req.user!.id;
+      
+      const success = await dbStorage.markAllNotificationsAsRead(userId);
+      
+      res.json({ message: 'All notifications marked as read' });
+    } catch (error) {
+      console.error('Error marking all notifications as read:', error);
+      res.status(500).json({ message: 'Failed to mark all notifications as read' });
     }
   });
 
@@ -1035,6 +1146,86 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Favorites Routes
+  app.post('/api/videos/:id/favorite', requireAuth, async (req, res) => {
+    try {
+      const videoId = parseInt(req.params.id);
+      if (isNaN(videoId)) {
+        return res.status(400).json({ message: "Invalid video ID" });
+      }
+      
+      const userId = req.user!.id;
+      
+      // Check if video exists
+      const video = await dbStorage.getVideoById(videoId);
+      if (!video) {
+        return res.status(404).json({ message: "Video not found" });
+      }
+      
+      // Add to favorites
+      const favorite = await dbStorage.addFavorite({
+        userId,
+        videoId
+      });
+      
+      if (!favorite) {
+        return res.status(500).json({ message: "Failed to add video to favorites" });
+      }
+      
+      res.status(201).json({ 
+        message: "Video added to favorites", 
+        favorite 
+      });
+    } catch (error) {
+      console.error("Add favorite error:", error);
+      res.status(500).json({ message: "Failed to add video to favorites" });
+    }
+  });
+  
+  app.delete('/api/videos/:id/favorite', requireAuth, async (req, res) => {
+    try {
+      const videoId = parseInt(req.params.id);
+      if (isNaN(videoId)) {
+        return res.status(400).json({ message: "Invalid video ID" });
+      }
+      
+      const userId = req.user!.id;
+      
+      // Remove from favorites
+      const removed = await dbStorage.removeFavorite(userId, videoId);
+      if (!removed) {
+        return res.status(404).json({ message: "Video not found in favorites" });
+      }
+      
+      res.json({ message: "Video removed from favorites" });
+    } catch (error) {
+      console.error("Remove favorite error:", error);
+      res.status(500).json({ message: "Failed to remove video from favorites" });
+    }
+  });
+  
+  app.get('/api/users/:id/favorites', requireAuth, async (req, res) => {
+    try {
+      const userId = req.params.id;
+      const currentUserId = req.user?.id;
+      
+      // Only allow users to view their own favorites
+      if (userId !== currentUserId) {
+        return res.status(403).json({ message: "You can only view your own favorites" });
+      }
+      
+      const limit = req.query.limit ? parseInt(req.query.limit as string) : 20;
+      const offset = req.query.offset ? parseInt(req.query.offset as string) : 0;
+      
+      const favorites = await dbStorage.getUserFavorites(userId, limit, offset);
+      
+      res.status(200).json(favorites);
+    } catch (error) {
+      console.error("Get favorites error:", error);
+      res.status(500).json({ message: "Failed to load favorites" });
+    }
+  });
+  
   // Search Routes
   app.get('/api/search', optionalAuth, async (req, res) => {
     try {
