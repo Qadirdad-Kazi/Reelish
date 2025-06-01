@@ -1423,28 +1423,60 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Favorites Routes
   app.post('/api/videos/:id/favorite', requireAuth, async (req, res) => {
+    console.log('POST /api/videos/:id/favorite - Starting');
     try {
-      const videoId = parseInt(req.params.id);
+      // Log request parameters
+      console.log('Request params:', req.params);
+      console.log('Request user:', req.user);
+      
+      // Ensure videoId is a number
+      const videoId = parseInt(req.params.id, 10);
+      console.log('Parsed videoId:', videoId, 'Original:', req.params.id);
+      
       if (isNaN(videoId)) {
+        console.log('Invalid video ID:', req.params.id);
         return res.status(400).json({ message: "Invalid video ID" });
       }
       
-      const userId = req.user!.id;
+      // Ensure user is authenticated
+      const userId = req.user?.id;
+      console.log('User ID from session:', userId);
+      
+      if (!userId) {
+        console.log('Authentication required - no user ID in session');
+        return res.status(401).json({ message: "Authentication required" });
+      }
+      
+      console.log(`Adding favorite - userId: ${userId}, videoId: ${videoId}`);
       
       // Check if video exists
+      console.log('Checking if video exists...');
       const video = await dbStorage.getVideoById(videoId);
+      console.log('Video lookup result:', video ? 'Found' : 'Not found');
+      
       if (!video) {
+        console.log(`Video with ID ${videoId} not found`);
         return res.status(404).json({ message: "Video not found" });
       }
       
-      // Add to favorites
-      const favorite = await dbStorage.addFavorite({
-        userId,
-        videoId
-      });
-      
-      if (!favorite) {
-        return res.status(500).json({ message: "Failed to add video to favorites" });
+      let favorite;
+      try {
+        // Add to favorites
+        console.log(`Attempting to add favorite with userId: ${userId}, videoId: ${videoId}`);
+        favorite = await dbStorage.addFavorite({
+          userId,
+          videoId
+        });
+        
+        if (!favorite) {
+          console.error(`Failed to add favorite: returned undefined`);
+          return res.status(500).json({ message: "Failed to add video to favorites" });
+        }
+        
+        console.log(`Successfully added favorite: ${JSON.stringify(favorite)}`);
+      } catch (innerError: any) {
+        console.error(`Inner error adding favorite:`, innerError);
+        return res.status(500).json({ message: "Error adding video to favorites", error: innerError.message || 'Unknown error' });
       }
       
       res.status(201).json({ 
@@ -1459,12 +1491,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
   
   app.delete('/api/videos/:id/favorite', requireAuth, async (req, res) => {
     try {
-      const videoId = parseInt(req.params.id);
+      // Ensure videoId is a number
+      const videoId = parseInt(req.params.id, 10);
       if (isNaN(videoId)) {
         return res.status(400).json({ message: "Invalid video ID" });
       }
       
-      const userId = req.user!.id;
+      // Ensure user is authenticated
+      const userId = req.user?.id;
+      if (!userId) {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+      
+      console.log(`Removing favorite - userId: ${userId}, videoId: ${videoId}`);
       
       // Remove from favorites
       const removed = await dbStorage.removeFavorite(userId, videoId);
@@ -1482,15 +1521,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/api/users/:id/favorites', requireAuth, async (req, res) => {
     try {
       const userId = req.params.id;
+      
+      // Ensure user is authenticated
       const currentUserId = req.user?.id;
+      if (!currentUserId) {
+        return res.status(401).json({ message: "Authentication required" });
+      }
       
       // Only allow users to view their own favorites
       if (userId !== currentUserId) {
         return res.status(403).json({ message: "You can only view your own favorites" });
       }
       
-      const limit = req.query.limit ? parseInt(req.query.limit as string) : 20;
-      const offset = req.query.offset ? parseInt(req.query.offset as string) : 0;
+      // Parse query parameters with defaults
+      const limit = parseInt(req.query.limit as string || '20', 10);
+      const offset = parseInt(req.query.offset as string || '0', 10);
+      
+      console.log(`Getting favorites for userId: ${userId}, limit: ${limit}, offset: ${offset}`);
       
       const favorites = await dbStorage.getUserFavorites(userId, limit, offset);
       

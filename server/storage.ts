@@ -221,17 +221,34 @@ export class DatabaseStorage implements IStorage {
   // Videos
   async getVideo(id: number): Promise<Video | undefined> {
     try {
-      const [video] = await db
+      console.log(`getVideo: Looking up video with ID: ${id}, type: ${typeof id}`);
+      
+      if (typeof id !== 'number' || isNaN(id)) {
+        console.error(`getVideo: Invalid video ID: ${id}`);
+        return undefined;
+      }
+      
+      const result = await db
         .select()
         .from(videos)
         .where(eq(videos.id, id));
+      
+      console.log(`getVideo: Query result:`, result);
+      
+      if (!result || result.length === 0) {
+        console.log(`getVideo: No video found with ID: ${id}`);
+        return undefined;
+      }
+      
+      const [video] = result;
+      console.log(`getVideo: Found video:`, { id: video.id, title: video.title });
       return video;
     } catch (error) {
-      console.error('Error getting video:', error);
+      console.error(`getVideo: Error getting video with ID ${id}:`, error);
       return undefined;
     }
   }
-  
+
   async getVideoById(id: number): Promise<Video | undefined> {
     return this.getVideo(id);
   }
@@ -416,127 +433,253 @@ export class DatabaseStorage implements IStorage {
     }));
   }
 
-  async createVideo(insertVideo: InsertVideo): Promise<Video> {
-    // Type assertion to access required properties safely
-    const videoData = insertVideo as unknown as { 
-      userId: string;
-      title: string;
-      videoUrl: string;
-      description?: string;
-      thumbnailUrl?: string;
-      musicName?: string;
-      isPrivate?: boolean;
-      hashtags?: string[];
-      mentions?: string[];
-      fileSize?: number;
-      format?: string;
-      duration?: number;
-      allowComments?: boolean;
-      allowDuet?: boolean;
-      allowDownload?: boolean;
-    };
-    
+  async addVideo(videoData: InsertVideo): Promise<Video | undefined> {
     console.log('Creating video with data:', JSON.stringify(videoData, null, 2));
     
-    // Create a properly typed video object with required fields
-    const videoToInsert = {
-      userId: videoData.userId,
-      title: videoData.title,
-      videoUrl: videoData.videoUrl,
-      description: videoData.description || null,
-      thumbnailUrl: videoData.thumbnailUrl || null,
-      musicName: videoData.musicName || null,
-      isPrivate: videoData.isPrivate || false,
-      hashtags: videoData.hashtags || [],
-      mentions: videoData.mentions || [],
-      fileSize: videoData.fileSize || 0,
-      format: videoData.format || null,
-      duration: videoData.duration || 0,
-      allowComments: videoData.allowComments !== false,
-      allowDuet: videoData.allowDuet !== false,
-      allowDownload: videoData.allowDownload !== false,
-      viewsCount: 0,
-      likesCount: 0,
-      commentsCount: 0,
-      sharesCount: 0,
-      createdAt: new Date(),
-      updatedAt: new Date()
-    };
-    
-    const [video] = await db
-      .insert(videos)
-      .values(videoToInsert)
-      .returning();
-    
-    // Update user's videos count
-    await db
-      .update(users)
-      .set({ 
-        videosCount: sql`${users.videosCount} + 1`,
+    try {
+      // Type assertion to ensure we have the required fields
+      if (!('userId' in videoData) || !('title' in videoData) || !('videoUrl' in videoData)) {
+        console.error('Missing required video data fields');
+        return undefined;
+      }
+      
+      // Create a properly typed video object with required fields
+      const videoToInsert: typeof videos.$inferInsert = {
+        userId: videoData.userId,
+        title: videoData.title,
+        videoUrl: videoData.videoUrl,
+        description: videoData.description || null,
+        thumbnailUrl: videoData.thumbnailUrl || null,
+        musicName: videoData.musicName || null,
+        isPrivate: videoData.isPrivate || false,
+        hashtags: Array.isArray(videoData.hashtags) ? videoData.hashtags : [],
+        mentions: Array.isArray(videoData.mentions) ? videoData.mentions : [],
+        fileSize: typeof videoData.fileSize === 'number' ? videoData.fileSize : 0,
+        format: videoData.format || null,
+        duration: typeof videoData.duration === 'number' ? videoData.duration : 0,
+        allowComments: videoData.allowComments !== false,
+        allowDuet: videoData.allowDuet !== false,
+        allowDownload: videoData.allowDownload !== false,
+        viewsCount: 0,
+        likesCount: 0,
+        commentsCount: 0,
+        sharesCount: 0,
+        createdAt: new Date(),
         updatedAt: new Date()
-      })
-      .where(eq(users.id, videoData.userId));
-    
-    return video;
-  }
-
-  async updateVideo(id: number, updates: Partial<Video>): Promise<Video | undefined> {
-    const [video] = await db
-      .update(videos)
-      .set({ ...updates, updatedAt: new Date() })
-      .where(eq(videos.id, id))
-      .returning();
-    
-    return video;
-  }
-
-  async deleteVideo(id: number, userId: string): Promise<boolean> {
-    const result = await db
-      .delete(videos)
-      .where(and(eq(videos.id, id), eq(videos.userId, userId)));
-    
-    if (result.rowCount && result.rowCount > 0) {
+      };
+      
+      // Insert the video and get the result
+      const [video] = await db
+        .insert(videos)
+        .values(videoToInsert)
+        .returning();
+      
       // Update user's videos count
       await db
         .update(users)
         .set({ 
-          videosCount: sql`${users.videosCount} - 1`,
+          videosCount: sql`${users.videosCount} + 1`,
           updatedAt: new Date()
         })
-        .where(eq(users.id, userId));
+        .where(eq(users.id, videoData.userId));
       
-      return true;
+      return video;
+    } catch (error) {
+      console.error('Error adding video:', error);
+      return undefined;
     }
+  }
+  
+  // Implementation of createVideo to match IStorage interface
+  async createVideo(video: InsertVideo): Promise<Video> {
+    const result = await this.addVideo(video);
+    if (!result) {
+      throw new Error('Failed to create video');
+    }
+    return result;
+  }
+  
+  async updateVideo(id: number, updates: Partial<Video>): Promise<Video | undefined> {
+    console.log('Updating video:', id, 'with data:', JSON.stringify(updates, null, 2));
     
-    return false;
+    try {
+      // First, get the video to check ownership
+      const existingVideo = await this.getVideo(id);
+      if (!existingVideo) {
+        console.error('Video not found for update:', id);
+        return undefined;
+      }
+      
+      // Create a properly typed update object
+      const updateFields: Partial<typeof videos.$inferInsert> = {};
+      
+      // Only add fields that are present in the update data
+      if (updates.title !== undefined) updateFields.title = updates.title;
+      if (updates.description !== undefined) updateFields.description = updates.description;
+      if (updates.thumbnailUrl !== undefined) updateFields.thumbnailUrl = updates.thumbnailUrl;
+      if (updates.videoUrl !== undefined) updateFields.videoUrl = updates.videoUrl;
+      if (updates.musicName !== undefined) updateFields.musicName = updates.musicName;
+      if (updates.isPrivate !== undefined) updateFields.isPrivate = updates.isPrivate;
+      if (updates.hashtags !== undefined) updateFields.hashtags = updates.hashtags;
+      if (updates.mentions !== undefined) updateFields.mentions = updates.mentions;
+      if (updates.allowComments !== undefined) updateFields.allowComments = updates.allowComments;
+      if (updates.allowDuet !== undefined) updateFields.allowDuet = updates.allowDuet;
+      if (updates.allowDownload !== undefined) updateFields.allowDownload = updates.allowDownload;
+      if (updates.location !== undefined) updateFields.location = updates.location;
+      
+      // Always update the updatedAt timestamp
+      updateFields.updatedAt = new Date();
+      
+      // Update the video and return the updated record
+      const [video] = await db
+        .update(videos)
+        .set(updateFields)
+        .where(eq(videos.id, id))
+        .returning();
+      
+      return video;
+    } catch (error) {
+      console.error('Error updating video:', error);
+      return undefined;
+    }
+  }
+
+  async deleteVideo(id: number, userId: string): Promise<boolean> {
+    try {
+      console.log(`Attempting to delete video with ID ${id} for user ${userId}`);
+      
+      // First, get the video to find the file paths before deleting the record
+      const videoToDelete = await db
+        .select()
+        .from(videos)
+        .where(and(eq(videos.id, id), eq(videos.userId, userId)))
+        .limit(1);
+      
+      if (!videoToDelete || videoToDelete.length === 0) {
+        console.log(`Video not found or user doesn't have permission to delete it`);
+        return false;
+      }
+      
+      const videoData = videoToDelete[0];
+      console.log(`Found video to delete: ${JSON.stringify(videoData)}`);
+      
+      // Delete the record from the database
+      const result = await db
+        .delete(videos)
+        .where(and(eq(videos.id, id), eq(videos.userId, userId)));
+      
+      if (result.rowCount && result.rowCount > 0) {
+        console.log(`Successfully deleted video record from database`);
+        
+        // Update user's videos count
+        await db
+          .update(users)
+          .set({ 
+            videosCount: sql`${users.videosCount} - 1`,
+            updatedAt: new Date()
+          })
+          .where(eq(users.id, userId));
+        
+        // Delete related records (likes, comments, favorites, etc.)
+        try {
+          // Delete likes
+          await db.delete(likes).where(eq(likes.videoId, id));
+          console.log(`Deleted likes for video ${id}`);
+          
+          // Delete comments
+          await db.delete(comments).where(eq(comments.videoId, id));
+          console.log(`Deleted comments for video ${id}`);
+          
+          // Delete favorites
+          await db.delete(favorites).where(eq(favorites.videoId, id));
+          console.log(`Deleted favorites for video ${id}`);
+        } catch (error) {
+          console.error(`Error deleting related records for video ${id}:`, error);
+          // Continue with file deletion even if related records deletion fails
+        }
+        
+        // Now delete the actual files from storage
+        try {
+          const fs = require('fs');
+          const path = require('path');
+          
+          // Extract filenames from URLs
+          const videoUrl = videoData.videoUrl;
+          const thumbnailUrl = videoData.thumbnailUrl;
+          
+          if (videoUrl) {
+            const videoFilename = videoUrl.split('/').pop();
+            if (videoFilename) {
+              const videoPath = path.join(__dirname, '../uploads', videoFilename);
+              if (fs.existsSync(videoPath)) {
+                fs.unlinkSync(videoPath);
+                console.log(`Deleted video file: ${videoPath}`);
+              } else {
+                console.log(`Video file not found: ${videoPath}`);
+              }
+            }
+          }
+          
+          if (thumbnailUrl) {
+            const thumbnailFilename = thumbnailUrl.split('/').pop();
+            if (thumbnailFilename) {
+              const thumbnailPath = path.join(__dirname, '../uploads', thumbnailFilename);
+              if (fs.existsSync(thumbnailPath)) {
+                fs.unlinkSync(thumbnailPath);
+                console.log(`Deleted thumbnail file: ${thumbnailPath}`);
+              } else {
+                console.log(`Thumbnail file not found: ${thumbnailPath}`);
+              }
+            }
+          }
+        } catch (fileError) {
+          console.error(`Error deleting video files:`, fileError);
+          // Return true anyway since the database record was deleted successfully
+        }
+        
+        return true;
+      }
+      
+      return false;
+    } catch (error) {
+      console.error(`Error in deleteVideo method:`, error);
+      return false;
+    }
   }
 
   async recordVideoView(view: InsertVideoView): Promise<void> {
-    // Type assertion to access required properties safely
-    const viewData = view as unknown as { 
-      videoId: number;
-      userId?: string;
-      completedView?: boolean;
-    };
-    
-    // Create a properly typed view object with required fields
-    const viewToInsert = {
-      videoId: viewData.videoId,
-      userId: viewData.userId || null,
-      completedView: viewData.completedView || false,
-      createdAt: new Date()
-    };
-    
-    await db.insert(videoViews).values(viewToInsert);
-    
-    // Update video view count
-    await db
-      .update(videos)
-      .set({ 
-        viewsCount: sql`${videos.viewsCount} + 1`,
-        updatedAt: new Date()
-      })
-      .where(eq(videos.id, viewData.videoId));
+    try {
+      // Validate that we have the required videoId
+      if (!view || typeof view !== 'object' || !('videoId' in view) || typeof view.videoId !== 'number') {
+        console.error('Missing or invalid videoId in recordVideoView');
+        return;
+      }
+      
+      // Create a properly typed view object with required fields
+      // Use a type-safe approach to extract only the fields we need
+      const viewToInsert = {
+        videoId: view.videoId,
+        userId: 'userId' in view && typeof view.userId === 'string' ? view.userId : null,
+        completedView: 'completedView' in view && typeof view.completedView === 'boolean' ? view.completedView : false,
+        createdAt: new Date()
+      };
+      
+      // Insert the view record
+      await db.insert(videoViews).values(viewToInsert);
+      
+      // Update video view count
+      await db
+        .update(videos)
+        .set({ 
+          viewsCount: sql`${videos.viewsCount} + 1`,
+          updatedAt: new Date()
+        })
+        .where(eq(videos.id, view.videoId));
+        
+      console.log(`Recorded view for video ${view.videoId}`);
+    } catch (error) {
+      console.error('Error recording video view:', error);
+    }
   }
 
   // Comments
@@ -1186,6 +1329,19 @@ export class DatabaseStorage implements IStorage {
   // Favorites/Saved Videos Methods
   async addFavorite(favoriteData: InsertFavorite): Promise<Favorite | undefined> {
     try {
+      console.log(`Storage: Adding favorite for user ${favoriteData.userId} and video ${favoriteData.videoId}`);
+      
+      // Validate input data
+      if (!favoriteData.userId || typeof favoriteData.userId !== 'string') {
+        console.error('Invalid userId in addFavorite:', favoriteData.userId);
+        return undefined;
+      }
+      
+      if (favoriteData.videoId === undefined || typeof favoriteData.videoId !== 'number') {
+        console.error('Invalid videoId in addFavorite:', favoriteData.videoId);
+        return undefined;
+      }
+      
       // Check if already favorited
       const existingFavorite = await db
         .select()
@@ -1199,15 +1355,21 @@ export class DatabaseStorage implements IStorage {
         .limit(1);
 
       if (existingFavorite.length > 0) {
+        console.log('Favorite already exists, returning existing record');
         return existingFavorite[0];
       }
 
+      console.log('Creating new favorite record');
       // Insert new favorite
       const [favorite] = await db
         .insert(favorites)
-        .values(favoriteData)
+        .values({
+          userId: favoriteData.userId,
+          videoId: favoriteData.videoId
+        })
         .returning();
 
+      console.log('New favorite created:', favorite);
       return favorite;
     } catch (error) {
       console.error('Error adding favorite:', error);
@@ -1217,6 +1379,39 @@ export class DatabaseStorage implements IStorage {
 
   async removeFavorite(userId: string, videoId: number): Promise<boolean> {
     try {
+      console.log(`Storage: Removing favorite for user ${userId} and video ${videoId}`);
+      
+      // Validate input data
+      if (!userId || typeof userId !== 'string') {
+        console.error('Invalid userId in removeFavorite:', userId);
+        return false;
+      }
+      
+      if (videoId === undefined || typeof videoId !== 'number') {
+        console.error('Invalid videoId in removeFavorite:', videoId);
+        return false;
+      }
+      
+      // First check if the favorite exists
+      const existingFavorite = await db
+        .select()
+        .from(favorites)
+        .where(
+          and(
+            eq(favorites.userId, userId),
+            eq(favorites.videoId, videoId)
+          )
+        )
+        .limit(1);
+
+      if (existingFavorite.length === 0) {
+        console.log('Favorite does not exist, nothing to remove');
+        return false;
+      }
+      
+      console.log('Favorite exists, proceeding with deletion');
+      
+      // Delete the favorite
       const result = await db
         .delete(favorites)
         .where(
@@ -1226,7 +1421,9 @@ export class DatabaseStorage implements IStorage {
           )
         );
 
-      return result.rowCount !== null && result.rowCount > 0;
+      const success = result.rowCount !== null && result.rowCount > 0;
+      console.log(`Deletion result: ${success ? 'successful' : 'failed'}`);
+      return success;
     } catch (error) {
       console.error('Error removing favorite:', error);
       return false;
@@ -1255,6 +1452,25 @@ export class DatabaseStorage implements IStorage {
 
   async getUserFavorites(userId: string, limit: number = 20, offset: number = 0): Promise<any[]> {
     try {
+      console.log(`Storage: Getting favorites for user ${userId}, limit: ${limit}, offset: ${offset}`);
+      
+      // Validate input data
+      if (!userId || typeof userId !== 'string') {
+        console.error('Invalid userId in getUserFavorites:', userId);
+        return [];
+      }
+      
+      if (typeof limit !== 'number' || limit < 0) {
+        console.error('Invalid limit in getUserFavorites:', limit);
+        limit = 20; // Use default
+      }
+      
+      if (typeof offset !== 'number' || offset < 0) {
+        console.error('Invalid offset in getUserFavorites:', offset);
+        offset = 0; // Use default
+      }
+      
+      console.log('Querying database for favorites');
       const favoriteVideos = await db
         .select({
           videos: videos,
@@ -1270,13 +1486,17 @@ export class DatabaseStorage implements IStorage {
         .limit(limit)
         .offset(offset);
 
-      return favoriteVideos.map(item => ({
+      console.log(`Found ${favoriteVideos.length} favorites`);
+      
+      const result = favoriteVideos.map(item => ({
         ...item.videos,
         user: item.users,
         favoriteId: item.favoriteId,
         favoriteCreatedAt: item.favoriteCreatedAt,
         isFavorite: true
       }));
+      
+      return result;
     } catch (error) {
       console.error('Error getting user favorites:', error);
       return [];

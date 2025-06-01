@@ -1,6 +1,5 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { VideoWithUser } from "@shared/schema";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Search, Play, Heart, TrendingUp } from "lucide-react";
@@ -8,17 +7,82 @@ import { formatNumber } from "@/lib/utils";
 import BottomNavigation from "@/components/BottomNavigation";
 import Header from "@/components/Header";
 
-const trendingHashtags = [
-  "#dance", "#cooking", "#art", "#fitness", "#comedy", "#music", "#diy", "#fashion", "#travel", "#pets"
-];
+// Define VideoWithUser interface locally instead of importing from @shared/schema
+interface User {
+  id: string;
+  username: string;
+  firstName?: string;
+  lastName?: string;
+  avatar?: string;
+  bio?: string;
+  isVerified?: boolean;
+}
+
+interface VideoWithUser {
+  id: number;
+  userId: string;
+  title: string;
+  description?: string;
+  videoUrl: string;
+  thumbnailUrl?: string;
+  viewsCount: number;
+  likesCount: number;
+  commentsCount: number;
+  sharesCount: number;
+  createdAt: string;
+  user: User;
+  isLiked?: boolean;
+  isFollowing?: boolean;
+  isFavorite?: boolean;
+}
+
+// Trending hashtags will be fetched from the server
+
+// Define the Tag type for trending hashtags
+interface Tag {
+  id: number;
+  name: string;
+  description?: string;
+  color?: string;
+  usageCount: number;
+  trending: boolean;
+  createdAt: string;
+}
 
 export default function Discover() {
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTab, setActiveTab] = useState<"trending" | "search">("trending");
+  const queryClient = useQueryClient();
+
+  // Fetch trending hashtags from the server
+  const { data: trendingHashtags = [], isLoading: hashtagsLoading } = useQuery<Tag[]>({
+    queryKey: ['trending-hashtags'],
+    queryFn: async () => {
+      const response = await fetch('/api/trending/hashtags', {
+        credentials: 'include'
+      });
+      if (!response.ok) {
+        console.error('Failed to fetch trending hashtags');
+        return [];
+      }
+      return await response.json();
+    },
+  });
 
   const { data: searchResults = [], isLoading: searchLoading } = useQuery<VideoWithUser[]>({
-    queryKey: [`/api/search/videos`, searchQuery],
+    queryKey: [`search`, searchQuery],
     enabled: searchQuery.length > 0,
+    queryFn: async () => {
+      if (!searchQuery.trim()) return [];
+      const response = await fetch(`/api/search?q=${encodeURIComponent(searchQuery)}&type=videos`, {
+        credentials: 'include' // Include credentials for authentication
+      });
+      if (!response.ok) {
+        throw new Error('Search failed');
+      }
+      const data = await response.json();
+      return data.videos || [];
+    },
   });
 
   const { data: trendingVideos = [] } = useQuery<VideoWithUser[]>({
@@ -29,12 +93,16 @@ export default function Discover() {
   const handleSearch = () => {
     if (searchQuery.trim()) {
       setActiveTab("search");
+      // Force refetch of search results when search button is clicked
+      queryClient.invalidateQueries({ queryKey: ['search', searchQuery] });
     }
   };
 
   const handleHashtagClick = (hashtag: string) => {
     setSearchQuery(hashtag);
     setActiveTab("search");
+    // Force refetch when a hashtag is clicked
+    queryClient.invalidateQueries({ queryKey: ['search', hashtag] });
   };
 
   return (
@@ -74,15 +142,21 @@ export default function Discover() {
                 Trending Hashtags
               </h2>
               <div className="flex flex-wrap gap-2">
-                {trendingHashtags.map((hashtag, index) => (
-                  <button
-                    key={hashtag}
-                    onClick={() => handleHashtagClick(hashtag)}
-                    className="px-3 py-1 bg-tiktok-gray rounded-full text-sm hover:bg-gray-700 transition-colors"
-                  >
-                    {hashtag}
-                  </button>
-                ))}
+                {hashtagsLoading ? (
+                  <div className="text-sm text-tiktok-light-gray">Loading trending hashtags...</div>
+                ) : trendingHashtags.length === 0 ? (
+                  <div className="text-sm text-tiktok-light-gray">No trending hashtags found</div>
+                ) : (
+                  trendingHashtags.map((tag) => (
+                    <button
+                      key={tag.id}
+                      onClick={() => handleHashtagClick(tag.name)}
+                      className="px-3 py-1 bg-tiktok-gray rounded-full text-sm hover:bg-gray-700 transition-colors"
+                    >
+                      #{tag.name}
+                    </button>
+                  ))
+                )}
               </div>
             </div>
 
@@ -90,7 +164,7 @@ export default function Discover() {
             <div className="p-4">
               <h2 className="text-lg font-semibold mb-4">Trending Videos</h2>
               <div className="grid grid-cols-2 gap-2">
-                {trendingVideos.map((video, index) => (
+                {trendingVideos.map((video) => (
                   <div key={video.id} className="aspect-[9/16] relative bg-gray-900 rounded-lg overflow-hidden group cursor-pointer">
                     <img
                       src={video.thumbnailUrl || video.videoUrl}
