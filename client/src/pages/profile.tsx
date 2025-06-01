@@ -1,6 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import ReactCrop, { type Crop, centerCrop, makeAspectCrop } from 'react-image-crop';
+import 'react-image-crop/dist/ReactCrop.css';
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 // UI components
@@ -27,7 +29,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 
 interface ProfileFormData {
-  displayName: string;
+  firstName: string;
+  lastName: string;
   bio: string;
   profileImageUrl: string;
 }
@@ -70,22 +73,31 @@ export default function Profile() {
   
   // Form state
   const [formData, setFormData] = useState<ProfileFormData>({
-    displayName: "",
+    firstName: "",
+    lastName: "",
     bio: "",
     profileImageUrl: ""
   });
+  
+  // File upload state
+  const [profileImage, setProfileImage] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string>("");
+  
+  // Image cropping state
+  const [showCropper, setShowCropper] = useState(false);
+  const [crop, setCrop] = useState<Crop>();
+  const [completedCrop, setCompletedCrop] = useState<Crop>();
+  const imgRef = useRef<HTMLImageElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [originalImageUrl, setOriginalImageUrl] = useState<string>("");
 
   // Determine which user profile to show
   const userId = urlUserId || (currentUser?.id || "");
   const isOwnProfile = currentUser?.id === userId;
   
   // Fetch user data
-  const {
-    data: userData,
-    isLoading: isUserLoading,
-    error: userError
-  } = useQuery({
-    queryKey: [`user-${userId}`],
+  const { data: userData, isLoading: isUserLoading, error: userError, refetch } = useQuery({
+    queryKey: ['user', userId],
     queryFn: async () => {
       console.log(`Fetching user data for ID: ${userId}`);
       const response = await fetch(`/api/users/${userId}`);
@@ -95,6 +107,7 @@ export default function Profile() {
       }
       const data = await response.json();
       console.log('User data from API:', data);
+      console.log('Profile image URL:', data.user?.profileImageUrl);
       return data;
     },
     enabled: !!userId
@@ -310,12 +323,25 @@ export default function Profile() {
         throw new Error("You can only edit your own profile");
       }
       
+      // Use FormData to handle file uploads
+      const formDataToSend = new FormData();
+      formDataToSend.append("firstName", data.firstName);
+      formDataToSend.append("lastName", data.lastName);
+      formDataToSend.append("bio", data.bio);
+      
+      // If we have a file, append it, otherwise use the URL
+      if (profileImage) {
+        formDataToSend.append("profileImage", profileImage);
+      } else if (data.profileImageUrl) {
+        formDataToSend.append("profileImageUrl", data.profileImageUrl);
+      }
+      
       const response = await fetch(`/api/users/${currentUser.id}`, {
         method: "PUT",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(data)
+        // Don't set Content-Type header when using FormData
+        // The browser will set it automatically with the correct boundary
+        credentials: "include",
+        body: formDataToSend
       });
       
       if (!response.ok) {
@@ -327,14 +353,17 @@ export default function Profile() {
     },
     onSuccess: () => {
       setShowEditModal(false);
-      queryClient.invalidateQueries({ queryKey: ["current-user"] });
-      queryClient.invalidateQueries({ queryKey: [`user-${userId}`] });
-      
       toast({
         title: "Profile Updated",
-        description: "Your profile has been successfully updated",
+        description: "Your profile has been updated successfully",
         duration: 3000
       });
+      
+      // Invalidate user query to refresh data
+      queryClient.invalidateQueries({ queryKey: ['user', userId] });
+      
+      // Force refetch to update UI immediately
+      refetch();
     },
     onError: (error: Error) => {
       toast({
@@ -350,10 +379,22 @@ export default function Profile() {
   const openEditModal = () => {
     if (userData?.user) {
       setFormData({
-        displayName: userData.user.displayName || "",
+        firstName: userData.user.firstName || "",
+        lastName: userData.user.lastName || "",
         bio: userData.user.bio || "",
         profileImageUrl: userData.user.profileImageUrl || ""
       });
+      
+      // Reset file state
+      setProfileImage(null);
+      
+      // If user has a profile image, show it in the preview
+      if (userData.user.profileImageUrl) {
+        setPreviewUrl(userData.user.profileImageUrl);
+      } else {
+        setPreviewUrl("");
+      }
+      
       setShowEditModal(true);
     }
   };
@@ -364,6 +405,124 @@ export default function Profile() {
       ...prev,
       [name]: value
     }));
+  };
+  
+  // Function to center and create an initial crop with aspect ratio
+  function centerAspectCrop(
+    mediaWidth: number,
+    mediaHeight: number,
+    aspect: number,
+  ): Crop {
+    return centerCrop(
+      makeAspectCrop(
+        {
+          unit: '%',
+          width: 90,
+        },
+        aspect,
+        mediaWidth,
+        mediaHeight,
+      ),
+      mediaWidth,
+      mediaHeight,
+    )
+  }
+  
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      setProfileImage(file);
+      
+      // Create a preview URL for the image and show cropper
+      const fileUrl = URL.createObjectURL(file);
+      setOriginalImageUrl(fileUrl);
+      setShowCropper(true);
+    }
+  };
+  
+  // Handle image load in cropper
+  const onImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
+    const { width, height } = e.currentTarget;
+    
+    // Create a circular crop (1:1 aspect ratio)
+    const crop = centerAspectCrop(width, height, 1);
+    setCrop(crop);
+  };
+  
+  // Clear the file input
+  const handleClearFile = () => {
+    setProfileImage(null);
+    setPreviewUrl("");
+    setOriginalImageUrl("");
+    setShowCropper(false);
+    setCrop(undefined);
+    setCompletedCrop(undefined);
+  };
+  
+  // Apply the crop and generate the final image
+  const handleCropComplete = (crop: Crop) => {
+    setCompletedCrop(crop);
+  };
+  
+  // Apply the crop and generate the final image
+  const applyCrop = () => {
+    if (
+      completedCrop?.width &&
+      completedCrop?.height &&
+      imgRef.current &&
+      canvasRef.current
+    ) {
+      // Get the canvas context
+      const canvas = canvasRef.current;
+      const ctx = canvas.getContext('2d');
+      
+      if (!ctx) {
+        return;
+      }
+      
+      // Set canvas dimensions to match the crop size
+      const scaleX = imgRef.current.naturalWidth / imgRef.current.width;
+      const scaleY = imgRef.current.naturalHeight / imgRef.current.height;
+      
+      // Make the canvas a perfect square for profile picture
+      const size = Math.min(300, 300); // Max size of 300x300 pixels
+      canvas.width = size;
+      canvas.height = size;
+      
+      // Draw a circle for the profile picture
+      ctx.beginPath();
+      ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
+      ctx.clip();
+      
+      // Draw the cropped image on the canvas
+      ctx.drawImage(
+        imgRef.current,
+        completedCrop.x * scaleX,
+        completedCrop.y * scaleY,
+        completedCrop.width * scaleX,
+        completedCrop.height * scaleY,
+        0,
+        0,
+        size,
+        size
+      );
+      
+      // Convert canvas to blob and create a File object
+      canvas.toBlob((blob: Blob | null) => {
+        if (blob) {
+          // Create a new File object from the blob
+          const croppedFile = new File([blob], 'profile-image.png', { type: 'image/png' });
+          setProfileImage(croppedFile);
+          
+          // Create a preview URL for the cropped image
+          const croppedUrl = URL.createObjectURL(blob);
+          setPreviewUrl(croppedUrl);
+          
+          // Hide the cropper
+          setShowCropper(false);
+        }
+      }, 'image/png');
+    }
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -526,13 +685,21 @@ export default function Profile() {
       {/* Profile Header - Smaller Size */}
       <div className="container px-4 pt-2 pb-8 md:pt-4">
         <div className="flex flex-col items-center space-y-2">
-          <Avatar className="h-16 w-16 md:h-20 md:w-20 border-2 border-background">
-            <AvatarImage src={user?.profileImageUrl || `https://ui-avatars.com/api/?name=${user?.username}`} />
+          <Avatar className="h-16 w-16 md:h-20 md:w-20 border-2 border-background relative overflow-hidden">
+            <AvatarImage 
+              src={user?.profileImageUrl ? `${window.location.origin}${user.profileImageUrl}` : `https://ui-avatars.com/api/?name=${user?.username}`} 
+              alt={user?.username || 'User'}
+              className="object-cover w-full h-full"
+              onError={(e) => {
+                console.error('Image failed to load:', user?.profileImageUrl);
+                e.currentTarget.src = `https://ui-avatars.com/api/?name=${user?.username}`;
+              }}
+            />
             <AvatarFallback>{user?.username?.substring(0, 2).toUpperCase()}</AvatarFallback>
           </Avatar>
           
           <div className="text-center">
-            <h1 className="text-lg md:text-xl font-bold">{user?.displayName || user?.username}</h1>
+            <h1 className="text-lg md:text-xl font-bold">{(user?.firstName && user?.lastName) ? `${user.firstName} ${user.lastName}` : user?.username}</h1>
             <p className="text-xs text-muted-foreground">@{user?.username}</p>
             
             {user?.bio && (
@@ -1049,13 +1216,24 @@ export default function Profile() {
           
           <form onSubmit={handleSubmit} className="space-y-4 mt-4">
             <div className="space-y-2">
-              <Label htmlFor="displayName">Display Name</Label>
+              <Label htmlFor="firstName">First Name</Label>
               <Input
-                id="displayName"
-                name="displayName"
-                value={formData.displayName}
+                id="firstName"
+                name="firstName"
+                value={formData.firstName}
                 onChange={handleInputChange}
-                placeholder="Your display name"
+                placeholder="Your first name"
+              />
+            </div>
+            
+            <div className="space-y-2">
+              <Label htmlFor="lastName">Last Name</Label>
+              <Input
+                id="lastName"
+                name="lastName"
+                value={formData.lastName}
+                onChange={handleInputChange}
+                placeholder="Your last name"
               />
             </div>
             
@@ -1072,14 +1250,98 @@ export default function Profile() {
             </div>
             
             <div className="space-y-2">
-              <Label htmlFor="profileImageUrl">Profile Image URL</Label>
+              <Label htmlFor="profileImage">Profile Image</Label>
+              
+              {/* Current profile image preview */}
+              {previewUrl && !showCropper && (
+                <div className="mb-2 flex flex-col items-center">
+                  <img 
+                    src={previewUrl} 
+                    alt="Profile preview" 
+                    className="w-24 h-24 rounded-full object-cover border-2 border-gray-200" 
+                  />
+                  <Button 
+                    variant="ghost" 
+                    size="sm" 
+                    onClick={handleClearFile}
+                    className="mt-1 text-xs text-red-500"
+                  >
+                    Remove image
+                  </Button>
+                </div>
+              )}
+              
+              {/* Image cropper */}
+              {showCropper && originalImageUrl && (
+                <div className="mb-4 flex flex-col items-center">
+                  <div className="mb-2">
+                    <ReactCrop
+                      crop={crop}
+                      onChange={(c: Crop) => setCrop(c)}
+                      onComplete={handleCropComplete}
+                      aspect={1}
+                      circularCrop
+                      className="max-h-[300px] max-w-full"
+                    >
+                      <img
+                        ref={imgRef}
+                        src={originalImageUrl}
+                        alt="Crop me"
+                        onLoad={onImageLoad}
+                        className="max-h-[300px] max-w-full"
+                      />
+                    </ReactCrop>
+                  </div>
+                  <div className="flex space-x-2">
+                    <Button 
+                      onClick={applyCrop}
+                      size="sm"
+                      className="bg-green-600 hover:bg-green-700"
+                    >
+                      Apply Crop
+                    </Button>
+                    <Button 
+                      onClick={handleClearFile}
+                      size="sm"
+                      variant="outline"
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                  {/* Hidden canvas for cropping */}
+                  <canvas
+                    ref={canvasRef}
+                    style={{ display: 'none' }}
+                  />
+                </div>
+              )}
+              
+              {/* File upload input */}
               <Input
-                id="profileImageUrl"
-                name="profileImageUrl"
-                value={formData.profileImageUrl}
-                onChange={handleInputChange}
-                placeholder="https://example.com/your-image.jpg"
+                id="profileImage"
+                name="profileImage"
+                type="file"
+                accept="image/*"
+                onChange={handleFileChange}
+                className="cursor-pointer"
               />
+              <p className="text-xs text-muted-foreground mt-1">
+                Upload a new profile picture or use the URL below
+              </p>
+              
+              {/* URL input as fallback */}
+              <div className="mt-2">
+                <Label htmlFor="profileImageUrl" className="text-xs">Or use image URL</Label>
+                <Input
+                  id="profileImageUrl"
+                  name="profileImageUrl"
+                  value={formData.profileImageUrl}
+                  onChange={handleInputChange}
+                  placeholder="https://example.com/your-image.jpg"
+                  disabled={!!profileImage}
+                  className="mt-1"
+                />
+              </div>
             </div>
             
             <div className="flex justify-end space-x-2 pt-4">

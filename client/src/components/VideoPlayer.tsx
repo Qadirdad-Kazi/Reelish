@@ -469,9 +469,13 @@ export default function VideoPlayer({ video, isActive = false }: VideoPlayerProp
           <div className="flex items-center space-x-3 mb-2">
             <Link href={`/profile/${video.user.id}`}>
               <img
-                src={video.user.profileImageUrl || `https://api.dicebear.com/7.x/avataaars/svg?seed=${video.user.username}`}
+                src={video.user.profileImageUrl ? `${window.location.origin}${video.user.profileImageUrl}` : `https://ui-avatars.com/api/?name=${video.user.username}`}
                 alt={video.user.username}
-                className="w-10 h-10 rounded-full border-2 border-white cursor-pointer"
+                className="w-10 h-10 rounded-full border-2 border-white cursor-pointer object-cover"
+                onError={(e) => {
+                  console.error('Profile image failed to load:', video.user.profileImageUrl);
+                  e.currentTarget.src = `https://ui-avatars.com/api/?name=${video.user.username}`;
+                }}
               />
             </Link>
             <div className="flex-1">

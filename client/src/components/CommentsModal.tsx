@@ -246,9 +246,13 @@ export default function CommentsModal({ isOpen, onClose, videoId, currentUserId 
     <div key={comment.id} className={`flex space-x-3 ${isReply ? 'ml-8 mt-3' : ''}`}>
       <Link href={`/profile/${comment.user.id}`}>
         <img
-          src={comment.user.profileImageUrl || `https://api.dicebear.com/7.x/avataaars/svg?seed=${comment.user.username}`}
+          src={comment.user.profileImageUrl ? `${window.location.origin}${comment.user.profileImageUrl}` : `https://ui-avatars.com/api/?name=${comment.user.username}`}
           alt={comment.user.username}
-          className="w-8 h-8 rounded-full cursor-pointer hover:ring-2 hover:ring-pink-500"
+          className="w-8 h-8 rounded-full cursor-pointer hover:ring-2 hover:ring-pink-500 object-cover"
+          onError={(e) => {
+            console.error('Comment profile image failed to load:', comment.user.profileImageUrl);
+            e.currentTarget.src = `https://ui-avatars.com/api/?name=${comment.user.username}`;
+          }}
         />
       </Link>
       <div className="flex-1">

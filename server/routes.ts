@@ -3,9 +3,11 @@ import { createServer, type Server } from "http";
 import express from "express";
 import session from "express-session";
 import memorystore from "memorystore";
-import multer from "multer";
+import multer from 'multer';
+import fs from 'fs';
+import util from 'util';
+import sharp from 'sharp';
 import path from "path";
-import fs from "fs";
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { storage as dbStorage } from "./storage";
@@ -44,6 +46,65 @@ const sessionConfig = {
     checkPeriod: 86400000 // prune expired entries every 24h
   }),
 };
+
+// Helper function to check if a file is HEIC format
+const isHeicImage = (file: Express.Multer.File): boolean => {
+  const ext = path.extname(file.originalname).toLowerCase();
+  return ext === '.heic' || ext === '.heif' || file.mimetype === 'image/heic' || file.mimetype === 'image/heif';
+};
+
+// Helper function to handle HEIC images
+const handleImageUpload = (file: Express.Multer.File): string | null => {
+  try {
+    console.log(`Processing image upload: ${file.path}`);
+    // For HEIC images, we'll just use a fallback approach
+    // since browser support is limited
+    if (isHeicImage(file)) {
+      console.log('HEIC format detected, using fallback approach');
+      // Return a default avatar URL instead
+      return null;
+    }
+    
+    // For other image formats, return the path
+    return `/uploads/${path.basename(file.path)}`;
+  } catch (error) {
+    console.error('Error processing image:', error);
+    return null;
+  }
+};
+
+// Configure multer for profile image uploads
+const profileImageStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadDir = path.join(__dirname, '../uploads');
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    // Always save as JPG for consistency
+    cb(null, uniqueSuffix + '.jpg');
+  }
+});
+
+const profileImageUpload = multer({
+  storage: profileImageStorage,
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    // Accept image files including HEIC format
+    if (file.mimetype.startsWith('image/') || 
+        file.originalname.toLowerCase().endsWith('.heic') || 
+        file.originalname.toLowerCase().endsWith('.heif')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed'));
+    }
+  }
+});
 
 // Configure multer for file uploads
 const uploadDir = path.join(__dirname, "../uploads");
@@ -102,16 +163,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Serve uploaded files with proper MIME types and caching
   app.use('/uploads', (req, res, next) => {
     console.log('Static file request for:', req.path);
+    // Add CORS headers for static files
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET');
+    res.header('Access-Control-Allow-Headers', 'Content-Type');
     next();
-  }, express.static(path.join(__dirname, '../uploads'), {
-    setHeaders: (res, path) => {
-      // Set appropriate headers for video files
-      if (path.endsWith('.mp4')) {
+  });
+  
+  // Use a more direct approach to serve static files
+  app.use('/uploads', express.static(path.join(__dirname, '../uploads'), {
+    setHeaders: (res, filePath) => {
+      // Set appropriate headers for different file types
+      if (filePath.endsWith('.mp4')) {
         res.setHeader('Content-Type', 'video/mp4');
-        // Allow browser to cache videos for 1 hour
-        res.setHeader('Cache-Control', 'public, max-age=3600');
+      } else if (filePath.endsWith('.jpg') || filePath.endsWith('.jpeg')) {
+        res.setHeader('Content-Type', 'image/jpeg');
+      } else if (filePath.endsWith('.png')) {
+        res.setHeader('Content-Type', 'image/png');
+      } else if (filePath.endsWith('.gif')) {
+        res.setHeader('Content-Type', 'image/gif');
       }
-      console.log('Serving file:', path);
+      
+      // Add CORS headers directly to the file response
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET');
+      
+      // Allow browser to cache files for 1 hour
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+      console.log('Serving file:', filePath);
     }
   }));
   
@@ -1084,6 +1163,66 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Get user following error:", error);
       res.status(500).json({ message: "Failed to load following users" });
+    }
+  });
+  
+  // Use the profile image upload configuration defined earlier with HEIC support
+  
+  // Update user profile
+  app.put('/api/users/:id', requireAuth, profileImageUpload.single('profileImage'), async (req, res) => {
+    // Process the uploaded image if any
+    let profileImageUrl: string | null = null;
+    if (req.file) {
+      profileImageUrl = handleImageUpload(req.file);
+    }
+    try {
+      const userId = req.params.id;
+      const currentUserId = req.user?.id;
+      
+      // Only allow users to update their own profile
+      if (userId !== currentUserId) {
+        return res.status(403).json({ message: "You can only update your own profile" });
+      }
+      
+      // Get the existing user
+      const existingUser = await dbStorage.getUserById(userId);
+      if (!existingUser) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      
+      // Prepare update data
+      const updateData: Partial<User> = {
+        ...existingUser,
+        firstName: req.body.firstName || existingUser.firstName,
+        lastName: req.body.lastName || existingUser.lastName,
+        bio: req.body.bio || existingUser.bio,
+        updatedAt: new Date()
+      };
+      
+      // If a new profile image was uploaded, update the profile image URL
+      if (profileImageUrl) {
+        updateData.profileImageUrl = profileImageUrl;
+      } else if (req.body.profileImageUrl) {
+        updateData.profileImageUrl = req.body.profileImageUrl;
+      }
+      
+      // Update the user in the database
+      const updatedUser = await dbStorage.updateUser(userId, updateData);
+      
+      if (!updatedUser) {
+        return res.status(404).json({ message: "Failed to update user" });
+      }
+      
+      // Remove sensitive data
+      const { password, ...userResponse } = updatedUser;
+      
+      res.json({
+        message: "Profile updated successfully",
+        user: userResponse
+      });
+    } catch (error) {
+      console.error("Update user error:", error);
+      res.status(500).json({ message: "Failed to update profile" });
     }
   });
 
