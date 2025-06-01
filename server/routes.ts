@@ -9,14 +9,24 @@ import fs from "fs";
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { storage as dbStorage } from "./storage";
+import { 
+  users, videos, comments, likes, follows, videoViews, conversations, messages, 
+  notifications, tags, videoTags, trendingHashtags, passwordResetTokens,
+  type User, type Video, type Comment, type Like, type Follow,
+  type InsertUser, type InsertVideo, type InsertComment, type InsertLike, type InsertFollow,
+  type VideoWithUser, type CommentWithUser, type UserWithStats, type InsertVideoView,
+  type InsertMessage, type InsertNotification, type Tag, type VideoView,
+  insertVideoSchema, insertCommentSchema, insertLikeSchema, insertFollowSchema
+} from "./shared/schema";
+import { z } from "zod";
+import "./types";
+import { db } from "./db";
+import { and, eq, isNotNull, inArray } from 'drizzle-orm';
 import { requireAuth, optionalAuth, loginSchema, registerSchema, registerSchemaWithPasswordValidation, forgotPasswordSchema, resetPasswordSchema } from "./auth";
 
 // ES module equivalent of __dirname
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-import { insertVideoSchema, insertCommentSchema, insertLikeSchema, insertFollowSchema } from "./shared/schema";
-import { z } from "zod";
-import "./types";
 
 // Configure session with memorystore
 const MemoryStore = memorystore(session);
@@ -699,6 +709,137 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Delete like error:", error);
       res.status(500).json({ message: "Failed to unlike" });
+    }
+  });
+  
+  // IMPORTANT: Order matters! The 'current' endpoint must come BEFORE the ':id' endpoint
+  // to avoid the ':id' route catching 'current' as an ID parameter
+  
+  // Get current user's liked videos
+  app.get('/api/users/current/liked-videos', requireAuth, async (req, res) => {
+    try {
+      const currentUserId = req.user?.id;
+      
+      if (!currentUserId) {
+        console.error("No authenticated user found for current user liked videos request");
+        return res.status(401).json({ message: "Authentication required" });
+      }
+      
+      console.log("Fetching likes for current user:", currentUserId);
+      // Get all likes by this user that are for videos (not comments)
+      const userLikes = await db
+        .select()
+        .from(likes)
+        .where(and(
+          eq(likes.userId, currentUserId),
+          isNotNull(likes.videoId)
+        ));
+      
+      console.log(`Found ${userLikes.length} likes for current user ${currentUserId}`);
+      
+      if (!userLikes.length) {
+        return res.status(200).json([]);
+      }
+      
+      // Extract video IDs from likes
+      const videoIds = userLikes.map(like => like.videoId).filter(Boolean) as number[];
+      console.log("Video IDs from likes:", videoIds);
+      
+      // Fetch the actual videos with their creators
+      const likedVideos = await db
+        .select()
+        .from(videos)
+        .innerJoin(users, eq(videos.userId, users.id))
+        .where(inArray(videos.id, videoIds));
+      
+      console.log(`Found ${likedVideos.length} videos for the liked video IDs`);
+      
+      // Process videos to include user data and like status
+      const processedVideos = await Promise.all(
+        likedVideos.map(async (result) => {
+          return {
+            ...result.videos,
+            user: result.users,
+            isLiked: true, // We know these are liked
+            isFollowing: await dbStorage.isFollowing(currentUserId, result.users.id)
+          };
+        })
+      );
+      
+      console.log(`Returning ${processedVideos.length} processed liked videos for current user`);
+      res.status(200).json(processedVideos);
+    } catch (error) {
+      console.error("Get current user's liked videos error:", error);
+      res.status(500).json({ message: "Failed to fetch liked videos" });
+    }
+  });
+  
+  // Get user's liked videos by ID
+  app.get('/api/users/:id/liked-videos', requireAuth, async (req, res) => {
+    try {
+      console.log("Liked videos request received for user:", req.params.id);
+      console.log("Current authenticated user:", req.user?.id);
+      
+      const userId = req.params.id;
+      const currentUserId = req.user?.id;
+      
+      if (!currentUserId) {
+        console.error("No authenticated user found for liked videos request");
+        return res.status(401).json({ message: "Authentication required" });
+      }
+      
+      // Only allow users to see their own liked videos
+      if (userId !== currentUserId) {
+        console.error(`User ${currentUserId} attempted to view liked videos for ${userId}`);
+        return res.status(403).json({ message: "You can only view your own liked videos" });
+      }
+      
+      console.log("Fetching likes for user:", userId);
+      // Get all likes by this user that are for videos (not comments)
+      const userLikes = await db
+        .select()
+        .from(likes)
+        .where(and(
+          eq(likes.userId, userId),
+          isNotNull(likes.videoId)
+        ));
+      
+      console.log(`Found ${userLikes.length} likes for user ${userId}`);
+      
+      if (!userLikes.length) {
+        return res.status(200).json([]);
+      }
+      
+      // Extract video IDs from likes
+      const videoIds = userLikes.map(like => like.videoId).filter(Boolean) as number[];
+      console.log("Video IDs from likes:", videoIds);
+      
+      // Fetch the actual videos with their creators
+      const likedVideos = await db
+        .select()
+        .from(videos)
+        .innerJoin(users, eq(videos.userId, users.id))
+        .where(inArray(videos.id, videoIds));
+      
+      console.log(`Found ${likedVideos.length} videos for the liked video IDs`);
+      
+      // Process videos to include user data and like status
+      const processedVideos = await Promise.all(
+        likedVideos.map(async (result) => {
+          return {
+            ...result.videos,
+            user: result.users,
+            isLiked: true, // We know these are liked
+            isFollowing: await dbStorage.isFollowing(currentUserId, result.users.id)
+          };
+        })
+      );
+      
+      console.log(`Returning ${processedVideos.length} processed liked videos`);
+      res.status(200).json(processedVideos);
+    } catch (error) {
+      console.error("Get liked videos error:", error);
+      res.status(500).json({ message: "Failed to fetch liked videos" });
     }
   });
 

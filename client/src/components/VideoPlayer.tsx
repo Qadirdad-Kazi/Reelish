@@ -31,10 +31,9 @@ interface VideoPlayerProps {
     isFollowing?: boolean;
   };
   isActive?: boolean;
-  currentUserId?: string;
 }
 
-export default function VideoPlayer({ video, isActive = false, currentUserId }: VideoPlayerProps) {
+export default function VideoPlayer({ video, isActive = false }: VideoPlayerProps) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMuted, setIsMuted] = useState(false); // Set to false for sound on by default
   const [showComments, setShowComments] = useState(false);
@@ -131,29 +130,116 @@ export default function VideoPlayer({ video, isActive = false, currentUserId }: 
   };
 
   const likeMutation = useMutation({
-    mutationFn: () => 
-      isLiked 
-        ? apiRequest(`/api/likes?videoId=${video.id}`, "DELETE")
-        : apiRequest("/api/likes", "POST", { videoId: video.id, userId: currentUserId }),
-    onSuccess: () => {
-      setIsLiked(!isLiked);
-      setLikesCount(prev => isLiked ? prev - 1 : prev + 1);
-      queryClient.invalidateQueries({ queryKey: ["/api/videos"] });
+    mutationFn: async () => {
+      try {
+        console.log(`${isLiked ? 'Unliking' : 'Liking'} video:`, video.id);
+        
+        // Make sure we're authenticated before liking
+        if (!user) {
+          throw new Error("You must be logged in to like videos");
+        }
+        
+        const endpoint = isLiked 
+          ? `/api/likes?videoId=${video.id}`
+          : "/api/likes";
+        
+        const method = isLiked ? "DELETE" : "POST";
+        const body = isLiked ? undefined : { videoId: video.id };
+        
+        console.log(`Making ${method} request to ${endpoint}`, body);
+        
+        const response = await apiRequest(method, endpoint, body);
+        console.log('Like response:', response);
+        return response;
+      } catch (error) {
+        console.error('Error in like mutation:', error);
+        throw error;
+      }
     },
-    onError: () => {
+    onSuccess: () => {
+      const newLikeStatus = !isLiked;
+      console.log(`Video ${video.id} like status changed to:`, newLikeStatus);
+      
+      setIsLiked(newLikeStatus);
+      setLikesCount(prev => isLiked ? prev - 1 : prev + 1);
+      
+      // Show toast confirmation
+      toast({
+        title: newLikeStatus ? "Liked!" : "Unliked",
+        description: newLikeStatus ? "Video added to your likes" : "Video removed from your likes",
+      });
+      
+      // Invalidate videos queries
+      queryClient.invalidateQueries({ queryKey: ["/api/videos"] });
+      
+      // Invalidate liked videos queries to update the likes tab
+      if (user) {
+        console.log(`Invalidating liked videos for user ${user.id}`);
+        queryClient.invalidateQueries({ queryKey: [`user-liked-videos-${user.id}`] });
+      }
+    },
+    onError: (error) => {
+      console.error('Like mutation error:', error);
       toast({
         title: "Error",
-        description: "Please log in to like videos",
+        description: error.message || "Failed to update like",
         variant: "destructive",
       });
     },
   });
 
+  const handleLike = async () => {
+    if (!user) {
+      toast({
+        title: "Authentication required",
+        description: "Please log in to like videos",
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    try {
+      // First check if we're authenticated
+      const authCheckResponse = await fetch('/api/auth/me', {
+        credentials: "include"
+      });
+      
+      if (!authCheckResponse.ok) {
+        toast({
+          title: "Authentication required",
+          description: "Please log in to like videos",
+          variant: "destructive",
+        });
+        return;
+      }
+      
+      // Proceed with the like mutation
+      likeMutation.mutate();
+      
+      // Force refresh of liked videos in profile page
+      setTimeout(() => {
+        if (user) {
+          // Include the user ID in the query key to match the profile page
+          queryClient.invalidateQueries({ queryKey: [`user-liked-videos-${user.id}`] });
+          // Also invalidate the current user endpoint
+          queryClient.invalidateQueries({ queryKey: [`user-liked-videos-current`] });
+        }
+      }, 500);
+    } catch (error) {
+      console.error("Error checking authentication:", error);
+      toast({
+        title: "Error",
+        description: "Failed to like video. Please try again.",
+        variant: "destructive",
+      });
+    }
+  };
+
   const followMutation = useMutation({
     mutationFn: () => 
       isFollowing 
-        ? apiRequest(`/api/follows/${video.user.id}`, "DELETE")
-        : apiRequest("/api/follows", "POST", { followingId: video.user.id }),
+        ? apiRequest("DELETE", `/api/follows/${video.user.id}`)
+        : apiRequest("POST", "/api/follows", { followingId: video.user.id }),
     onSuccess: () => {
       setIsFollowing(!isFollowing);
       toast({
@@ -350,7 +436,7 @@ export default function VideoPlayer({ video, isActive = false, currentUserId }: 
           size="lg"
           variant="ghost"
           className={`rounded-full ${isLiked ? 'text-red-500' : 'text-white'} hover:scale-110 transition-transform`}
-          onClick={() => likeMutation.mutate()}
+          onClick={handleLike}
         >
           <Heart className={`w-8 h-8 ${isLiked ? 'fill-current' : ''}`} />
           <span className="sr-only">Like</span>

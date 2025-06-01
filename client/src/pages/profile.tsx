@@ -3,7 +3,7 @@ import { useParams } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsContent } from "@/components/ui/tabs";
+// UI components
 import { Heart, Loader2, LogOut, MoreVertical, Trash, Edit, Play } from "lucide-react";
 import MiniPlayer from "@/components/MiniPlayer";
 import { formatNumber } from "@/lib/utils";
@@ -63,6 +63,10 @@ export default function Profile() {
   const [showMiniPlayer, setShowMiniPlayer] = useState(false);
   const [miniPlayerVideo, setMiniPlayerVideo] = useState<Video | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<number | null>(null);
+  const [activeTab, setActiveTab] = useState<'videos' | 'private' | 'saved' | 'likes'>('videos');
+  const [likedVideos, setLikedVideos] = useState<Video[]>([]);
+  const [privateVideos, setPrivateVideos] = useState<Video[]>([]);
+  const [savedVideos, setSavedVideos] = useState<Video[]>([]);
   
   // Form state
   const [formData, setFormData] = useState<ProfileFormData>({
@@ -95,22 +99,106 @@ export default function Profile() {
   });
 
   // Fetch user videos
-  const {
-    data: videosData,
-    isLoading: isVideosLoading
-  } = useQuery({
+  const { data: videosData, isLoading: isVideosLoading } = useQuery({
     queryKey: [`user-videos-${userId}`],
     queryFn: async () => {
-      console.log(`Fetching videos for user ID: ${userId}`);
-      const response = await fetch(`/api/users/${userId}/videos`);
+      const response = await fetch(`/api/users/${userId}/videos`, {
+        credentials: "include"
+      });
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || "Failed to fetch user videos");
+        throw new Error("Failed to fetch user videos");
       }
       return response.json();
     },
-    enabled: !!userId
+    enabled: !!userId,
+    staleTime: 1000 * 60 * 5, // 5 minutes
   });
+  
+  // Fetch user's liked videos (only for own profile)
+  const { data: likedVideosData, isLoading: isLikedVideosLoading, error: likedVideosError, refetch: refetchLikedVideos } = useQuery({
+    queryKey: [`user-liked-videos-${userId}`],
+    queryFn: async () => {
+      try {
+        // Only fetch liked videos if we're authenticated and viewing our own profile
+        if (!isAuthenticated || !isOwnProfile) {
+          console.log("Not authenticated or not own profile, skipping liked videos fetch");
+          return [];
+        }
+        
+        console.log("Fetching liked videos for current user");
+        
+        // First ensure we're logged in by checking auth status
+        const authCheckResponse = await fetch('/api/auth/me', {
+          credentials: "include"
+        });
+        
+        if (!authCheckResponse.ok) {
+          console.error("Auth check failed:", authCheckResponse.status);
+          throw new Error("Authentication required");
+        }
+        
+        // Use 'current' instead of the userId to ensure we're getting the authenticated user's likes
+        const response = await fetch(`/api/users/current/liked-videos`, {
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json"
+          }
+        });
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error("Liked videos error:", response.status, errorText);
+          throw new Error(`Failed to fetch liked videos: ${response.status} ${errorText}`);
+        }
+        
+        const data = await response.json();
+        console.log("Liked videos data:", data);
+        return data;
+      } catch (error) {
+        console.error("Error fetching liked videos:", error);
+        throw error;
+      }
+    },
+    enabled: isAuthenticated && isOwnProfile,
+    staleTime: 1000 * 60 * 5, // 5 minutes
+    retry: 1,
+  });
+  
+  useEffect(() => {
+    if (videosData && Array.isArray(videosData) && videosData.length > 0 && isOwnProfile) {
+      // Filter actual private videos from the user's videos
+      const realPrivateVideos = videosData.filter(video => video.isPrivate === true);
+      setPrivateVideos(realPrivateVideos);
+      
+      // Simulate saved videos (for demo purposes)
+      const publicVideosOnly = videosData.filter(video => video.isPrivate === false);
+      const mockSavedVideos = [...publicVideosOnly]
+        .sort(() => Math.random() - 0.5)
+        .slice(0, Math.max(1, Math.floor(publicVideosOnly.length / 4)))
+        .map((video: Video) => ({
+          ...video,
+          isSaved: true
+        }));
+      setSavedVideos(mockSavedVideos);
+    }
+  }, [videosData, isOwnProfile]);
+  
+  // Set liked videos from API data when available
+  useEffect(() => {
+    if (likedVideosData && Array.isArray(likedVideosData)) {
+      console.log("Setting liked videos from API data:", likedVideosData);
+      setLikedVideos(likedVideosData);
+    }
+    
+    if (likedVideosError) {
+      console.error("Liked videos error in useEffect:", likedVideosError);
+      toast({
+        title: "Error loading liked videos",
+        description: "Please try refreshing the page",
+        variant: "destructive"
+      });
+    }
+  }, [likedVideosData, likedVideosError, toast]);
 
   // Check if current user is following the profile user
   const {
@@ -246,7 +334,7 @@ export default function Profile() {
   };
 
   // Video interaction handlers
-  const { handleLike } = useVideoActions(currentUser?.id ? parseInt(currentUser.id) : undefined);
+  const { handleLike } = useVideoActions(isAuthenticated ? userData?.user?.id : undefined);
 
   const handleVideoClick = (video: Video) => {
     setMiniPlayerVideo(video);
@@ -383,8 +471,10 @@ export default function Profile() {
   }
 
   const user = userData?.user;
-  // Handle both formats: direct array or nested object with videos property
-  const videos = Array.isArray(videosData) ? videosData : videosData?.videos || [];
+  // Handle array format from server and filter out private videos for public display
+  const allVideos = videosData && Array.isArray(videosData) ? videosData : [];
+  // For the public videos tab, only show non-private videos
+  const videos = allVideos.filter(video => !video.isPrivate);
   const isFollowing = followData?.isFollowing || false;
 
   return (
@@ -499,24 +589,57 @@ export default function Profile() {
         
         {/* Videos Section */}
         <div className="mt-8">
-          <Tabs defaultValue="videos" className="w-full">
-            <TabsContent value="videos" className="mt-4">
-              {isVideosLoading ? (
-                <div className="flex justify-center py-8">
-                  <Loader2 className="h-6 w-6 animate-spin text-primary" />
-                </div>
-              ) : videos.length === 0 ? (
-                <div className="text-center py-8">
-                  <p className="text-muted-foreground">No videos yet</p>
-                  {isOwnProfile && (
-                    <Button className="mt-4" onClick={() => window.location.href = "/upload"}>
-                      Upload a Video
-                    </Button>
-                  )}
-                </div>
-              ) : (
-                <div className="grid grid-cols-3 gap-1 md:gap-2">
-                  {videos.map((video: Video) => (
+          <div className="w-full">
+            <div className="flex border-b overflow-x-auto no-scrollbar">
+              <button 
+                className={`px-4 py-2 text-xs font-medium ${activeTab === 'videos' ? 'border-b-2 border-primary' : 'text-muted-foreground'}`}
+                onClick={() => setActiveTab('videos')}
+              >
+                Public
+              </button>
+              {isOwnProfile && (
+                <>
+                  <button 
+                    className={`px-4 py-2 text-xs font-medium ${activeTab === 'private' ? 'border-b-2 border-primary' : 'text-muted-foreground'}`}
+                    onClick={() => setActiveTab('private')}
+                  >
+                    Private
+                  </button>
+                  <button 
+                    className={`px-4 py-2 text-xs font-medium ${activeTab === 'saved' ? 'border-b-2 border-primary' : 'text-muted-foreground'}`}
+                    onClick={() => setActiveTab('saved')}
+                  >
+                    Saved
+                  </button>
+                  <button 
+                    className={`px-4 py-2 text-xs font-medium ${activeTab === 'likes' ? 'border-b-2 border-primary' : 'text-muted-foreground'}`}
+                    onClick={() => setActiveTab('likes')}
+                  >
+                    Likes
+                  </button>
+                </>
+              )}
+            </div>
+            
+            {/* Public Videos Tab */}
+            {activeTab === 'videos' && (
+              <div className="mt-4">
+                {isVideosLoading ? (
+                  <div className="flex justify-center py-8">
+                    <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                  </div>
+                ) : videos.length === 0 ? (
+                  <div className="text-center py-8">
+                    <p className="text-muted-foreground">No videos yet</p>
+                    {isOwnProfile && (
+                      <Button className="mt-4" onClick={() => window.location.href = "/upload"}>
+                        Upload a Video
+                      </Button>
+                    )}
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-3 gap-1 md:gap-2">
+                    {videos.map((video: Video) => (
                     <div 
                       key={video.id} 
                       className="aspect-[9/16] relative overflow-hidden bg-gray-100 rounded-md cursor-pointer"
@@ -606,10 +729,214 @@ export default function Profile() {
                       )}
                     </div>
                   ))}
-                </div>
-              )}
-            </TabsContent>
-          </Tabs>
+                  </div>
+                )}
+              </div>
+            )}
+            
+            {/* Private Videos Tab - Only for own profile */}
+            {activeTab === 'private' && isOwnProfile && (
+              <div className="mt-4">
+                {privateVideos.length === 0 ? (
+                  <div className="text-center py-8">
+                    <p className="text-muted-foreground">No private videos</p>
+                    <p className="text-xs text-muted-foreground mt-1">Videos you set to private will appear here</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-3 gap-1 md:gap-2">
+                    {privateVideos.map((video: Video) => (
+                      <div 
+                        key={`private-${video.id}`} 
+                        className="aspect-[9/16] relative overflow-hidden bg-gray-100 rounded-md cursor-pointer"
+                        onClick={() => handleVideoClick(video)}
+                      >
+                        <div className="absolute top-0 right-0 bg-black/50 text-white text-xs px-1 py-0.5 rounded-bl-md">
+                          Private
+                        </div>
+                        <img 
+                          src={video.thumbnailUrl || `https://picsum.photos/seed/${video.id}/400/600`}
+                          alt={video.title || "Video thumbnail"}
+                          className="w-full h-full object-cover"
+                        />
+                        <div className="absolute bottom-1 left-1 flex items-center text-white text-xs">
+                          <Play className="h-3 w-3 mr-1" />
+                          <span>{formatNumber(video.viewsCount || 0)}</span>
+                        </div>
+                        {renderVideoActions(video)}
+                        
+                        {/* Kebab Menu */}
+                        <div 
+                          className="absolute top-1 left-1 p-1"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <button className="p-1 bg-black/50 rounded-full text-white hover:bg-black/70 transition-colors">
+                                <MoreVertical className="h-3 w-3" />
+                              </button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="start" className="w-32">
+                              <DropdownMenuItem
+                                className="text-xs cursor-pointer flex items-center gap-1"
+                                onClick={() => {
+                                  toast({
+                                    title: "Make Public",
+                                    description: "This feature is coming soon",
+                                    duration: 3000
+                                  });
+                                }}
+                              >
+                                <Edit className="h-3 w-3 mr-1" /> Make Public
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                className="text-xs cursor-pointer flex items-center gap-1 text-red-500 focus:text-red-500"
+                                onClick={() => setShowDeleteConfirm(Number(video.id))}
+                              >
+                                <Trash className="h-3 w-3 mr-1" /> Delete
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </div>
+                        
+                        {/* Delete Confirmation */}
+                        {showDeleteConfirm === Number(video.id) && (
+                          <div 
+                            className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center p-2"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <p className="text-white text-xs text-center mb-2">Are you sure you want to delete this video?</p>
+                            <div className="flex gap-2">
+                              <button 
+                                className="bg-red-500 text-white text-xs px-2 py-1 rounded"
+                                onClick={() => deleteVideoMutation.mutate(Number(video.id))}
+                              >
+                                {deleteVideoMutation.isPending ? "Deleting..." : "Delete"}
+                              </button>
+                              <button 
+                                className="bg-gray-500 text-white text-xs px-2 py-1 rounded"
+                                onClick={() => setShowDeleteConfirm(null)}
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            
+            {/* Saved Videos Tab - Only for own profile */}
+            {activeTab === 'saved' && isOwnProfile && (
+              <div className="mt-4">
+                {savedVideos.length === 0 ? (
+                  <div className="text-center py-8">
+                    <p className="text-muted-foreground">No saved videos</p>
+                    <p className="text-xs text-muted-foreground mt-1">Videos you save will appear here</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-3 gap-1 md:gap-2">
+                    {savedVideos.map((video: Video) => (
+                      <div 
+                        key={`saved-${video.id}`} 
+                        className="aspect-[9/16] relative overflow-hidden bg-gray-100 rounded-md cursor-pointer"
+                        onClick={() => handleVideoClick(video)}
+                      >
+                        <div className="absolute top-0 right-0 bg-black/50 text-white text-xs px-1 py-0.5 rounded-bl-md">
+                          Saved
+                        </div>
+                        <img 
+                          src={video.thumbnailUrl || `https://picsum.photos/seed/${video.id}/400/600`}
+                          alt={video.title || "Video thumbnail"}
+                          className="w-full h-full object-cover"
+                        />
+                        <div className="absolute bottom-1 left-1 flex items-center text-white text-xs">
+                          <Play className="h-3 w-3 mr-1" />
+                          <span>{formatNumber(video.viewsCount || 0)}</span>
+                        </div>
+                        <div 
+                          className="absolute top-1 right-1 p-1 bg-black/30 rounded-full" 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toast({
+                              title: "Unsaved",
+                              description: "Video removed from saved",
+                              duration: 3000
+                            });
+                            setSavedVideos(prev => prev.filter(v => v.id !== video.id));
+                          }}
+                        >
+                          <Trash className="h-3 w-3 text-white" />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            
+            {/* Likes Tab */}
+            {activeTab === 'likes' && (
+              <div className="mt-4">
+                {isLikedVideosLoading ? (
+                  <div className="flex justify-center py-8">
+                    <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                  </div>
+                ) : likedVideos.length === 0 ? (
+                  <div className="text-center py-8">
+                    <p className="text-muted-foreground">No liked videos yet</p>
+                    {isOwnProfile && (
+                      <>
+                        <p className="text-sm text-muted-foreground mt-2">
+                          Like videos to see them here
+                        </p>
+                        <Button 
+                          variant="outline" 
+                          size="sm" 
+                          className="mt-4"
+                          onClick={() => {
+                            // Use the refetch function directly instead of invalidating the query
+                            refetchLikedVideos();
+                            toast({
+                              title: "Refreshing liked videos",
+                              description: "Checking for your latest likes"
+                            });
+                          }}
+                        >
+                          Refresh Liked Videos
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-3 gap-1 md:gap-2">
+                    {likedVideos.map((video: Video) => (
+                      <div 
+                        key={video.id} 
+                        className="aspect-[9/16] relative overflow-hidden bg-gray-100 rounded-md cursor-pointer"
+                        onClick={() => handleVideoClick(video)}
+                      >
+                        <img 
+                          src={video.thumbnailUrl || `https://picsum.photos/seed/${video.id}/400/600`}
+                          alt={video.title || "Video thumbnail"}
+                          className="w-full h-full object-cover"
+                        />
+                        <div className="absolute bottom-1 left-1 flex items-center text-white text-xs">
+                          <Play className="h-3 w-3 mr-1" />
+                          <span>{formatNumber(video.viewsCount || 0)}</span>
+                        </div>
+                        <div className="absolute top-1 right-1 p-1 bg-red-500 rounded-full">
+                          <Heart className="h-3 w-3 text-white" />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
       
