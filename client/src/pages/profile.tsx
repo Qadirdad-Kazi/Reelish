@@ -93,7 +93,9 @@ export default function Profile() {
         const errorData = await response.json();
         throw new Error(errorData.message || "Failed to fetch user data");
       }
-      return response.json();
+      const data = await response.json();
+      console.log('User data from API:', data);
+      return data;
     },
     enabled: !!userId
   });
@@ -235,22 +237,8 @@ export default function Profile() {
     }
   }, [likedVideosData, likedVideosError, toast]);
 
-  // Check if current user is following the profile user
-  const {
-    data: followData
-  } = useQuery({
-    queryKey: [`follow-status-${userId}`],
-    queryFn: async () => {
-      if (!isAuthenticated || isOwnProfile) return { isFollowing: false };
-      
-      const response = await fetch(`/api/users/${userId}/follow-status`);
-      if (!response.ok) {
-        return { isFollowing: false };
-      }
-      return response.json();
-    },
-    enabled: isAuthenticated && !isOwnProfile && !!userId
-  });
+  // Get follow status from user data instead of making a separate API call
+  // The isFollowing property is already included in the user profile response
 
   // Follow/unfollow mutation
   const followMutation = useMutation({
@@ -259,29 +247,48 @@ export default function Profile() {
         throw new Error("You must be logged in to follow users");
       }
       
-      const action = followData?.isFollowing ? "unfollow" : "follow";
-      const response = await fetch(`/api/users/${userId}/${action}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
+      const isCurrentlyFollowing = userData?.user?.isFollowing;
+      
+      if (isCurrentlyFollowing) {
+        // Unfollow - DELETE request to /api/follows/:userId
+        const response = await fetch(`/api/follows/${userId}`, {
+          method: "DELETE",
+          credentials: "include"
+        });
+        
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.message || "Failed to unfollow user");
         }
-      });
-      
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || `Failed to ${action} user`);
+        
+        return response.json();
+      } else {
+        // Follow - POST request to /api/follows
+        const response = await fetch(`/api/follows`, {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ followingId: userId })
+        });
+        
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.message || "Failed to follow user");
+        }
+        
+        return response.json();
       }
-      
-      return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [`follow-status-${userId}`] });
+      // Only need to invalidate the user query since we're not using a separate follow-status query
       queryClient.invalidateQueries({ queryKey: [`user-${userId}`] });
       
       toast({
-        title: followData?.isFollowing ? "Unfollowed" : "Following",
-        description: followData?.isFollowing 
-          ? `You have unfollowed ${userData?.user?.username}` 
+        title: userData?.user?.isFollowing ? "Unfollowed" : "Following",
+        description: userData?.user?.isFollowing 
+          ? `You are no longer following ${userData?.user?.username}`
           : `You are now following ${userData?.user?.username}`,
         duration: 3000
       });
@@ -510,7 +517,7 @@ export default function Profile() {
   const allVideos = videosData && Array.isArray(videosData) ? videosData : [];
   // For the public videos tab, only show non-private videos
   const videos = allVideos.filter(video => !video.isPrivate);
-  const isFollowing = followData?.isFollowing || false;
+  const isFollowing = userData?.user?.isFollowing || false;
 
   return (
     <div className="flex flex-col min-h-screen bg-background">
@@ -536,15 +543,15 @@ export default function Profile() {
           {/* Stats */}
           <div className="flex space-x-6 text-center">
             <div>
-              <p className="text-sm font-semibold">{formatNumber(userData?.stats?.videoCount || 0)}</p>
+              <p className="text-sm font-semibold">{formatNumber(userData?.user?.stats?.videoCount || 0)}</p>
               <p className="text-xs text-muted-foreground">Videos</p>
             </div>
             <div>
-              <p className="text-sm font-semibold">{formatNumber(userData?.stats?.followersCount || 0)}</p>
+              <p className="text-sm font-semibold">{formatNumber(userData?.user?.stats?.followerCount || 0)}</p>
               <p className="text-xs text-muted-foreground">Followers</p>
             </div>
             <div>
-              <p className="text-sm font-semibold">{formatNumber(userData?.stats?.followingCount || 0)}</p>
+              <p className="text-sm font-semibold">{formatNumber(userData?.user?.stats?.followingCount || 0)}</p>
               <p className="text-xs text-muted-foreground">Following</p>
             </div>
           </div>

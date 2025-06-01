@@ -1,4 +1,4 @@
-import { pgTable, text, varchar, serial, integer, boolean, timestamp, jsonb, index, uuid } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, serial, integer, boolean, timestamp, jsonb, index, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { relations } from "drizzle-orm";
 
@@ -320,7 +320,7 @@ export const favorites = pgTable("favorites", {
   createdAt: timestamp("created_at").defaultNow(),
 }, (table) => {
   return {
-    userVideoIdx: index("favorites_user_video_idx").on(table.userId, table.videoId).unique(),
+    userVideoIdx: uniqueIndex("favorites_user_video_idx").on(table.userId, table.videoId),
   };
 });
 
