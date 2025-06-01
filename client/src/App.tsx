@@ -16,6 +16,7 @@ import NotFound from "@/pages/not-found";
 const Inbox = lazy(() => import("@/pages/inbox"));
 const Upload = lazy(() => import("@/pages/upload"));
 const Hashtag = lazy(() => import("@/pages/hashtag"));
+const Settings = lazy(() => import("@/pages/settings"));
 
 function Router() {
   const { isAuthenticated, isLoading } = useAuth();
@@ -49,6 +50,7 @@ function Router() {
             <Route path="/inbox" component={Inbox} />
             <Route path="/upload" component={Upload} />
             <Route path="/hashtag/:hashtag" component={Hashtag} />
+            <Route path="/settings" component={Settings} />
             <Route component={NotFound} />
           </Switch>
         </Suspense>

@@ -155,6 +155,16 @@ export class DatabaseStorage implements IStorage {
     const isValid = await bcrypt.compare(password, user.password);
     return isValid ? user : null;
   }
+  
+  // Verify password with hashed password
+  async verifyPasswordHash(hashedPassword: string, plainPassword: string): Promise<boolean> {
+    return bcrypt.compare(plainPassword, hashedPassword);
+  }
+  
+  // Hash a new password
+  async hashPassword(password: string): Promise<string> {
+    return bcrypt.hash(password, 10);
+  }
 
   // Password reset
   async createPasswordResetToken(email: string): Promise<string> {

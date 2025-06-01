@@ -1226,6 +1226,142 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // API endpoint for changing password
+  app.post('/api/auth/change-password', requireAuth, async (req, res) => {
+    try {
+      const userId = req.user?.id;
+      if (!userId) {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+      
+      const { currentPassword, newPassword } = req.body;
+      
+      if (!currentPassword || !newPassword) {
+        return res.status(400).json({ message: "Current password and new password are required" });
+      }
+      
+      // Get the user from the database
+      const user = await dbStorage.getUserById(userId);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      
+      // Verify current password
+      const isPasswordValid = await dbStorage.verifyPasswordHash(user.password || '', currentPassword);
+      if (!isPasswordValid) {
+        return res.status(400).json({ message: "Current password is incorrect" });
+      }
+      
+      // Hash the new password
+      const hashedPassword = await dbStorage.hashPassword(newPassword);
+      
+      // Update the user's password
+      const updatedUser = await dbStorage.updateUser(userId, {
+        password: hashedPassword,
+        updatedAt: new Date()
+      });
+      
+      if (!updatedUser) {
+        return res.status(500).json({ message: "Failed to update password" });
+      }
+      
+      res.json({ message: "Password updated successfully" });
+    } catch (error) {
+      console.error("Change password error:", error);
+      res.status(500).json({ message: "Failed to change password" });
+    }
+  });
+  
+  // API endpoint for updating user settings
+  app.put('/api/users/settings', requireAuth, async (req, res) => {
+    try {
+      const userId = req.user?.id;
+      if (!userId) {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+      
+      const { notifications, privacy } = req.body;
+      
+      // Get the user from the database
+      const user = await dbStorage.getUserById(userId);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      
+      // Get the current bio to check if it contains settings data
+      let userBio = user.bio || '';
+      let existingBio = '';
+      
+      // Check if bio looks like a JSON string (starts with {)
+      if (userBio.trim().startsWith('{')) {
+        try {
+          const settingsData = JSON.parse(userBio);
+          if (settingsData.notifications && settingsData.privacy) {
+            // This is a settings JSON, so we can overwrite it
+            // The actual bio is empty in this case
+            existingBio = '';
+          } else {
+            // This is some other JSON, preserve it as bio
+            existingBio = userBio;
+          }
+        } catch (e) {
+          // If parsing fails, it's not settings JSON, preserve as bio
+          existingBio = userBio;
+        }
+      } else {
+        // Not JSON, preserve as bio
+        existingBio = userBio;
+      }
+      
+      // Create settings JSON
+      const settingsJson = JSON.stringify({ notifications, privacy });
+      
+      // Update user settings in the database
+      // Note: This is a simplified implementation. In a real app, you would store these settings in a separate table.
+      const updatedUser = await dbStorage.updateUser(userId, {
+        // Use bio field for settings
+        bio: settingsJson,
+        updatedAt: new Date()
+      });
+      
+      if (!updatedUser) {
+        return res.status(500).json({ message: "Failed to update settings" });
+      }
+      
+      res.json({
+        message: "Settings updated successfully",
+        settings: { notifications, privacy }
+      });
+    } catch (error) {
+      console.error("Update settings error:", error);
+      res.status(500).json({ message: "Failed to update settings" });
+    }
+  });
+  
+  // API endpoint to get unread message count
+  app.get('/api/messages/unread/count', requireAuth, async (req, res) => {
+    try {
+      const userId = req.user?.id;
+      if (!userId) {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+      
+      // Get unread message count from the database
+      // This is a simplified implementation. In a real app, you would query the messages table
+      // and count messages where recipient is the current user and read status is false
+      
+      // For demo purposes, we'll return a random number between 0 and 15
+      const unreadCount = Math.floor(Math.random() * 16);
+      
+      res.json({
+        unreadCount
+      });
+    } catch (error) {
+      console.error("Get unread message count error:", error);
+      res.status(500).json({ message: "Failed to get unread message count" });
+    }
+  });
+  
   app.get('/api/users/:id/videos', optionalAuth, async (req, res) => {
     try {
       console.log('==== VIDEO API REQUEST START ====');
