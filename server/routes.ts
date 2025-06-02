@@ -11,6 +11,7 @@ import path from "path";
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { storage as dbStorage } from "./storage";
+import { sql } from 'drizzle-orm';
 import { 
   users, videos, comments, likes, follows, videoViews, conversations, messages, 
   notifications, tags, videoTags, trendingHashtags, passwordResetTokens,
@@ -1339,19 +1340,91 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
   
   // API endpoint to get unread message count
+  // Get all user conversations
+  app.get('/api/conversations', requireAuth, async (req, res) => {
+    try {
+      const userId = req.session.userId;
+      if (!userId) {
+        return res.status(401).json({ message: 'Unauthorized' });
+      }
+
+      const conversations = await dbStorage.getConversations(userId);
+      res.json(conversations);
+    } catch (error) {
+      console.error('Error fetching conversations:', error);
+      res.status(500).json({ message: 'Failed to fetch conversations' });
+    }
+  });
+
+  // Get messages for a specific conversation
+  app.get('/api/conversations/:id/messages', requireAuth, async (req, res) => {
+    try {
+      const userId = req.session.userId;
+      if (!userId) {
+        return res.status(401).json({ message: 'Unauthorized' });
+      }
+
+      const conversationId = parseInt(req.params.id);
+      if (isNaN(conversationId)) {
+        return res.status(400).json({ message: 'Invalid conversation ID' });
+      }
+
+      // Optional pagination parameters
+      const offset = req.query.offset ? parseInt(req.query.offset as string) : 0;
+      const limit = req.query.limit ? parseInt(req.query.limit as string) : 50;
+
+      const messages = await dbStorage.getConversationMessages(conversationId, offset, limit);
+      res.json(messages);
+    } catch (error) {
+      console.error('Error fetching messages:', error);
+      res.status(500).json({ message: 'Failed to fetch messages' });
+    }
+  });
+
+  // Send a new message
+  app.post('/api/messages', requireAuth, async (req, res) => {
+    try {
+      const { conversationId, content } = req.body;
+      const userId = req.session.userId;
+      
+      if (!userId) {
+        return res.status(401).json({ message: 'Unauthorized' });
+      }
+      
+      if (!conversationId || !content) {
+        return res.status(400).json({ message: 'Missing required fields' });
+      }
+      
+      // Define the message with the proper type to match the InsertMessage interface
+      const message: {
+        conversationId: number;
+        senderId: string;
+        content: string;
+        createdAt: Date;
+      } = {
+        conversationId: Number(conversationId), // Ensure conversationId is a number
+        senderId: userId,
+        content,
+        createdAt: new Date()
+      };
+      
+      const newMessage = await dbStorage.createMessage(message);
+      res.status(201).json(newMessage);
+    } catch (error) {
+      console.error('Error sending message:', error);
+      res.status(500).json({ message: 'Failed to send message' });
+    }
+  });
+
   app.get('/api/messages/unread/count', requireAuth, async (req, res) => {
     try {
-      const userId = req.user?.id;
+      const userId = req.session.userId;
       if (!userId) {
-        return res.status(401).json({ message: "Authentication required" });
+        return res.status(401).json({ message: 'Unauthorized' });
       }
       
       // Get unread message count from the database
-      // This is a simplified implementation. In a real app, you would query the messages table
-      // and count messages where recipient is the current user and read status is false
-      
-      // For demo purposes, we'll return a random number between 0 and 15
-      const unreadCount = Math.floor(Math.random() * 16);
+      const unreadCount = await dbStorage.getUnreadMessageCount(userId);
       
       res.json({
         unreadCount
@@ -1423,101 +1496,117 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Favorites Routes
   app.post('/api/videos/:id/favorite', requireAuth, async (req, res) => {
-    console.log('POST /api/videos/:id/favorite - Starting');
     try {
-      // Log request parameters
-      console.log('Request params:', req.params);
-      console.log('Request user:', req.user);
-      
-      // Ensure videoId is a number
-      const videoId = parseInt(req.params.id, 10);
-      console.log('Parsed videoId:', videoId, 'Original:', req.params.id);
-      
-      if (isNaN(videoId)) {
-        console.log('Invalid video ID:', req.params.id);
-        return res.status(400).json({ message: "Invalid video ID" });
-      }
+      console.log('POST /api/videos/:id/favorite - Starting');
       
       // Ensure user is authenticated
-      const userId = req.user?.id;
-      console.log('User ID from session:', userId);
-      
-      if (!userId) {
-        console.log('Authentication required - no user ID in session');
+      if (!req.user?.id) {
         return res.status(401).json({ message: "Authentication required" });
       }
       
-      console.log(`Adding favorite - userId: ${userId}, videoId: ${videoId}`);
+      // Ensure videoId is a number
+      const videoId = parseInt(req.params.id, 10);
+      if (isNaN(videoId) || videoId <= 0) {
+        return res.status(400).json({ message: "Invalid video ID" });
+      }
       
       // Check if video exists
-      console.log('Checking if video exists...');
       const video = await dbStorage.getVideoById(videoId);
-      console.log('Video lookup result:', video ? 'Found' : 'Not found');
-      
       if (!video) {
-        console.log(`Video with ID ${videoId} not found`);
         return res.status(404).json({ message: "Video not found" });
       }
       
-      let favorite;
-      try {
-        // Add to favorites
-        console.log(`Attempting to add favorite with userId: ${userId}, videoId: ${videoId}`);
-        favorite = await dbStorage.addFavorite({
-          userId,
-          videoId
-        });
-        
-        if (!favorite) {
-          console.error(`Failed to add favorite: returned undefined`);
-          return res.status(500).json({ message: "Failed to add video to favorites" });
-        }
-        
-        console.log(`Successfully added favorite: ${JSON.stringify(favorite)}`);
-      } catch (innerError: any) {
-        console.error(`Inner error adding favorite:`, innerError);
-        return res.status(500).json({ message: "Error adding video to favorites", error: innerError.message || 'Unknown error' });
-      }
+      // Create favorite data
+      const favoriteData = {
+        userId: req.user.id,
+        videoId: videoId
+      };
+      
+      // Add to favorites
+      const favorite = await dbStorage.addFavorite(favoriteData);
       
       res.status(201).json({ 
         message: "Video added to favorites", 
         favorite 
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Add favorite error:", error);
       res.status(500).json({ message: "Failed to add video to favorites" });
     }
   });
   
+  // Temporary endpoint to create the favorites table
+  app.get('/api/admin/create-favorites-table', async (req, res) => {
+    try {
+      console.log('Creating favorites table...');
+      
+      // Create the favorites table
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS favorites (
+          id SERIAL PRIMARY KEY,
+          user_id VARCHAR NOT NULL,
+          video_id INTEGER NOT NULL,
+          created_at TIMESTAMP DEFAULT NOW(),
+          CONSTRAINT favorites_user_video_idx UNIQUE (user_id, video_id)
+        );
+      `);
+      
+      console.log('✅ Favorites table created successfully!');
+      
+      // Verify the table exists
+      const result = await db.execute(sql`
+        SELECT EXISTS (
+          SELECT FROM information_schema.tables 
+          WHERE table_name = 'favorites'
+        );
+      `);
+      
+      console.log('Table exists:', result.rows[0].exists);
+      
+      return res.status(200).json({ 
+        message: 'Favorites table created successfully',
+        exists: result.rows[0].exists
+      });
+    } catch (error) {
+      console.error('❌ Failed to create favorites table:', error);
+      return res.status(500).json({ 
+        message: 'Failed to create favorites table',
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+
   app.delete('/api/videos/:id/favorite', requireAuth, async (req, res) => {
     try {
-      // Ensure videoId is a number
-      const videoId = parseInt(req.params.id, 10);
-      if (isNaN(videoId)) {
-        return res.status(400).json({ message: "Invalid video ID" });
-      }
+      console.log('DELETE /api/videos/:id/favorite - Starting');
       
       // Ensure user is authenticated
-      const userId = req.user?.id;
-      if (!userId) {
+      if (!req.user?.id) {
         return res.status(401).json({ message: "Authentication required" });
       }
       
-      console.log(`Removing favorite - userId: ${userId}, videoId: ${videoId}`);
-      
-      // Remove from favorites
-      const removed = await dbStorage.removeFavorite(userId, videoId);
-      if (!removed) {
-        return res.status(404).json({ message: "Video not found in favorites" });
+      // Ensure videoId is a number
+      const videoId = parseInt(req.params.id, 10);
+      if (isNaN(videoId) || videoId <= 0) {
+        return res.status(400).json({ message: "Invalid video ID" });
       }
       
-      res.json({ message: "Video removed from favorites" });
-    } catch (error) {
-      console.error("Remove favorite error:", error);
+      // Check if video exists
+      const video = await dbStorage.getVideoById(videoId);
+      if (!video) {
+        return res.status(404).json({ message: "Video not found" });
+      }
+      
+      // Remove from favorites
+      await dbStorage.removeFavorite(req.user.id, videoId);
+      
+      res.status(200).json({ message: "Video removed from favorites" });
+    } catch (error: any) {
+      console.error('Error removing favorite:', error);
       res.status(500).json({ message: "Failed to remove video from favorites" });
     }
   });
-  
+
   app.get('/api/users/:id/favorites', requireAuth, async (req, res) => {
     try {
       const userId = req.params.id;

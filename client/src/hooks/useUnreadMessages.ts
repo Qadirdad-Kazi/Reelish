@@ -5,6 +5,14 @@ export function useUnreadMessages() {
     queryKey: ['unreadMessages'],
     queryFn: async () => {
       try {
+        // Check if user is logged in before making the request
+        // This is a simple check - you might want to use a more robust method
+        const isLoggedIn = document.cookie.includes('connect.sid');
+        if (!isLoggedIn) {
+          // Skip the request if not logged in
+          return 0;
+        }
+        
         const response = await fetch('/api/messages/unread/count', {
           method: 'GET',
           headers: {
@@ -13,17 +21,23 @@ export function useUnreadMessages() {
           credentials: 'include',
         });
         
+        // Handle different response statuses silently
         if (!response.ok) {
-          throw new Error('Failed to fetch unread messages count');
+          // For any error (401, 404, etc.), just return 0 without logging
+          return 0;
         }
         
         const data = await response.json();
         return data.unreadCount || 0;
       } catch (error) {
-        console.error('Error fetching unread messages:', error);
+        // Silently handle errors without logging
         return 0;
       }
     },
-    refetchInterval: 30000, // Refetch every 30 seconds
+    refetchInterval: 60000, // Reduce frequency to once per minute
+    // Don't retry failed requests
+    retry: false,
+    // Prevent refetching on window focus for this background query
+    refetchOnWindowFocus: false,
   });
 }

@@ -7,12 +7,10 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Search, Send, MoreHorizontal, Heart, MessageCircle, Users, Bell } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import BottomNavigation from "@/components/BottomNavigation";
 import Header from "@/components/Header";
-import { Link } from "wouter";
 
 interface Conversation {
   id: number;
@@ -73,21 +71,41 @@ export default function Inbox() {
     queryKey: ['/api/conversations'],
     queryFn: async () => {
       try {
+        // Check if user is logged in before making the request
+        if (!user) {
+          console.info('User not authenticated, returning empty conversations');
+          return [];
+        }
+        
+        console.log('Fetching conversations from API...');
         const response = await fetch('/api/conversations', {
           credentials: 'include'
         });
         
         if (!response.ok) {
-          throw new Error('Failed to fetch conversations');
+          // Log detailed error but don't show to user
+          console.error(`Error fetching conversations: ${response.status} ${response.statusText}`);
+          console.error('API endpoint /api/conversations may not be implemented yet');
+          return [];
         }
         
-        return response.json();
+        const data = await response.json();
+        console.log('Conversations fetched successfully:', data.length);
+        return data;
       } catch (error) {
         console.error('Error fetching conversations:', error);
         return [];
       }
     },
     enabled: activeTab === 'messages' && !!user,
+    // Retry failed requests a few times
+    retry: 2,
+    // Refetch on window focus for real-time updates
+    refetchOnWindowFocus: true,
+    // Refetch every minute
+    refetchInterval: 60000,
+    // Don't refetch on error to avoid console spam
+    refetchOnReconnect: false,
   });
 
   // Fetch messages for selected conversation
@@ -95,21 +113,36 @@ export default function Inbox() {
     queryKey: [`/api/conversations/${selectedConversation}/messages`],
     queryFn: async () => {
       try {
+        // Check if user is logged in and conversation is selected
+        if (!user || !selectedConversation) {
+          console.info('User not authenticated or no conversation selected, returning empty messages');
+          return [];
+        }
+        
+        console.log(`Fetching messages for conversation ${selectedConversation}...`);
         const response = await fetch(`/api/conversations/${selectedConversation}/messages`, {
           credentials: 'include'
         });
         
         if (!response.ok) {
-          throw new Error('Failed to fetch messages');
+          console.error(`Error fetching messages: ${response.status} ${response.statusText}`);
+          console.error(`API endpoint /api/conversations/${selectedConversation}/messages may not be implemented yet`);
+          return [];
         }
         
-        return response.json();
+        const data = await response.json();
+        console.log(`Messages fetched successfully for conversation ${selectedConversation}:`, data.length);
+        return data;
       } catch (error) {
         console.error('Error fetching messages:', error);
         return [];
       }
     },
-    enabled: !!selectedConversation,
+    enabled: !!selectedConversation && !!user,
+    retry: 2,
+    refetchOnWindowFocus: true,
+    refetchInterval: 30000,
+    refetchOnReconnect: false,
   });
 
   // Fetch notifications
@@ -117,27 +150,48 @@ export default function Inbox() {
     queryKey: ['/api/notifications'],
     queryFn: async () => {
       try {
+        if (!user) {
+          console.info('User not authenticated, returning empty notifications');
+          return [];
+        }
+        
+        console.log('Fetching notifications from API...');
         const response = await fetch('/api/notifications', {
           credentials: 'include'
         });
         
         if (!response.ok) {
-          throw new Error('Failed to fetch notifications');
+          console.error(`Error fetching notifications: ${response.status} ${response.statusText}`);
+          console.error('API endpoint /api/notifications may not be implemented yet');
+          return [];
         }
         
-        return response.json();
+        const data = await response.json();
+        console.log('Notifications fetched successfully:', data.length);
+        return data;
       } catch (error) {
         console.error('Error fetching notifications:', error);
         return [];
       }
     },
     enabled: activeTab === 'activity' && !!user,
+    retry: 2,
+    refetchOnWindowFocus: true,
+    refetchInterval: 60000,
+    refetchOnReconnect: false,
   });
 
   // Send message mutation
-  const sendMessageMutation = useMutation<any, Error, { conversationId: number; content: string }>({
+  const sendMessageMutation = useMutation<Message, Error, { conversationId: number; content: string }>({
     mutationFn: async (data: { conversationId: number; content: string }) => {
       try {
+        // Check if user is logged in before making the request
+        if (!user) {
+          console.error('User not authenticated, cannot send message');
+          throw new Error('User not authenticated');
+        }
+        
+        console.log(`Sending message to conversation ${data.conversationId}...`);
         const response = await fetch('/api/messages', {
           method: 'POST',
           headers: {
@@ -148,10 +202,14 @@ export default function Inbox() {
         });
         
         if (!response.ok) {
-          throw new Error('Failed to send message');
+          console.error(`Error sending message: ${response.status} ${response.statusText}`);
+          console.error('API endpoint /api/messages may not be implemented yet');
+          throw new Error(`Error sending message: ${response.status}`);
         }
         
-        return response.json();
+        const result = await response.json();
+        console.log('Message sent successfully:', result);
+        return result;
       } catch (error) {
         console.error('Error sending message:', error);
         throw error;
@@ -187,7 +245,7 @@ export default function Inbox() {
         return response.json();
       } catch (error) {
         console.error('Error marking notification as read:', error);
-        throw error;
+        throw error; // Keep throwing error for mutations to trigger onError handler
       }
     },
     onSuccess: () => {
@@ -211,7 +269,7 @@ export default function Inbox() {
         return response.json();
       } catch (error) {
         console.error('Error marking all notifications as read:', error);
-        throw error;
+        throw error; // Keep throwing error for mutations to trigger onError handler
       }
     },
     onSuccess: () => {

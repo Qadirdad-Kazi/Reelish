@@ -1,13 +1,24 @@
 import { 
-  users, videos, comments, likes, follows, videoViews, conversations, messages, 
-  notifications, tags, videoTags, trendingHashtags, passwordResetTokens, favorites,
+  users, videos, comments, likes, follows, favorites, videoViews, conversations, messages, notifications, tags, 
+  videoTags, trendingHashtags, passwordResetTokens
+} from './shared/schema';
+import {
   type User, type Video, type Comment, type Like, type Follow, type Favorite,
   type InsertUser, type InsertVideo, type InsertComment, type InsertLike, type InsertFollow,
   type InsertFavorite, type VideoWithUser, type CommentWithUser, type UserWithStats, type InsertVideoView,
-  type InsertMessage, type InsertNotification, type Tag, type VideoView
+  type InsertNotification, type VideoView, type Tag
 } from "./shared/schema";
+
+// Define a proper InsertMessage interface to fix TypeScript errors
+interface InsertMessage {
+  conversationId: number;
+  senderId: string;
+  content: string;
+  createdAt?: Date;
+}
+
 import { db } from "./db";
-import { and, asc, count, desc, eq, gt, gte, ilike, inArray, isNotNull, isNull, like, lt, lte, ne, not, or, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gt, gte, ilike, inArray, isNotNull, isNull, like, lt, lte, ne, not, or, sql, between } from 'drizzle-orm';
 import { nanoid } from "nanoid";
 import bcrypt from "bcryptjs";
 
@@ -1221,17 +1232,216 @@ export class DatabaseStorage implements IStorage {
     );
   }
 
-  // Messaging (basic implementation)
+  // Messaging implementation
   async getConversations(userId: string): Promise<any[]> {
-    return [];
+    try {
+      // Get all conversations where the user is a participant
+      const userConversations = await db.select({
+        id: conversations.id,
+        participant1Id: conversations.participant1Id,
+        participant2Id: conversations.participant2Id,
+        lastMessageAt: conversations.lastMessageAt,
+        createdAt: conversations.createdAt
+      })
+      .from(conversations)
+      .where(
+        or(
+          eq(conversations.participant1Id, userId),
+          eq(conversations.participant2Id, userId)
+        )
+      );
+      
+      // For each conversation, get the other participant's details
+      const result = await Promise.all(userConversations.map(async (conv) => {
+        // Find the other participant (not the current user)
+        const otherUserId = conv.participant1Id === userId ? conv.participant2Id : conv.participant1Id;
+        
+        // Get the other user's details
+        const participant = await db.select({
+          id: users.id,
+          username: users.username,
+          firstName: users.firstName,
+          lastName: users.lastName,
+          profileImageUrl: users.profileImageUrl,
+        })
+        .from(users)
+        .where(eq(users.id, otherUserId))
+        .limit(1);
+        
+        // Get the last message in this conversation
+        const lastMessages = await db.select({
+          id: messages.id,
+          content: messages.content,
+          createdAt: messages.createdAt,
+          senderId: messages.senderId
+        })
+        .from(messages)
+        .where(eq(messages.conversationId, conv.id))
+        .orderBy(desc(messages.createdAt))
+        .limit(1);
+        
+        const lastMessage = lastMessages.length > 0 ? lastMessages[0] : null;
+        
+        // Count unread messages for the current user
+        const unreadCount = await db.select({ count: sql`count(*)` })
+        .from(messages)
+        .where(
+          and(
+            eq(messages.conversationId, conv.id),
+            not(eq(messages.senderId, userId)),
+            isNull(messages.readAt)
+          )
+        );
+        
+        return {
+          id: conv.id,
+          participant: participant[0] || { id: otherUserId, username: 'Unknown User' },
+          lastMessage,
+          unreadCount: unreadCount[0]?.count || 0
+        };
+      }));
+      
+      // Sort conversations by last message date (most recent first)
+      return result.sort((a, b) => {
+        const dateA = a.lastMessage?.createdAt ? new Date(a.lastMessage.createdAt).getTime() : 0;
+        const dateB = b.lastMessage?.createdAt ? new Date(b.lastMessage.createdAt).getTime() : 0;
+        return dateB - dateA;
+      });
+    } catch (error) {
+      console.error('Error in getConversations:', error);
+      return [];
+    }
   }
 
   async createMessage(message: InsertMessage): Promise<any> {
-    return null;
+    try {
+      // Validate that the conversation exists and the user is a participant
+      const conversation = await db.select()
+        .from(conversations)
+        .where(eq(conversations.id, message.conversationId))
+        .limit(1);
+      
+      if (!conversation || conversation.length === 0) {
+        throw new Error('Conversation not found');
+      }
+      
+      const conv = conversation[0];
+      if (conv.participant1Id !== message.senderId && conv.participant2Id !== message.senderId) {
+        throw new Error('User is not a participant in this conversation');
+      }
+      
+      // Insert the new message
+      const result = await db.insert(messages).values({
+        conversationId: message.conversationId,
+        senderId: message.senderId,
+        content: message.content,
+        createdAt: message.createdAt || new Date()
+      }).returning();
+      
+      // Update the conversation's lastMessageAt timestamp
+      await db.update(conversations)
+        .set({ lastMessageAt: new Date() })
+        .where(eq(conversations.id, message.conversationId));
+      
+      // Get the sender details to return with the message
+      const sender = await db.select({
+        id: users.id,
+        username: users.username,
+        profileImageUrl: users.profileImageUrl
+      })
+      .from(users)
+      .where(eq(users.id, message.senderId))
+      .limit(1);
+      
+      return {
+        ...result[0],
+        sender: sender[0]
+      };
+    } catch (error) {
+      console.error('Error in createMessage:', error);
+      throw error;
+    }
   }
 
   async getConversationMessages(conversationId: number, offset = 0, limit = 50): Promise<any[]> {
-    return [];
+    try {
+      // Get messages for the conversation with pagination
+      const messageList = await db.select({
+        id: messages.id,
+        content: messages.content,
+        senderId: messages.senderId,
+        createdAt: messages.createdAt,
+        readAt: messages.readAt
+      })
+      .from(messages)
+      .where(eq(messages.conversationId, conversationId))
+      .orderBy(desc(messages.createdAt))
+      .offset(offset)
+      .limit(limit);
+      
+      // For each message, get the sender details
+      const result = await Promise.all(messageList.map(async (msg) => {
+        const sender = await db.select({
+          id: users.id,
+          username: users.username,
+          profileImageUrl: users.profileImageUrl
+        })
+        .from(users)
+        .where(eq(users.id, msg.senderId))
+        .limit(1);
+        
+        return {
+          ...msg,
+          sender: sender[0] || { id: msg.senderId, username: 'Unknown User' },
+          read: msg.readAt !== null
+        };
+      }));
+      
+      return result;
+    } catch (error) {
+      console.error('Error in getConversationMessages:', error);
+      return [];
+    }
+  }
+
+  async getUnreadMessageCount(userId: string): Promise<number> {
+    try {
+      // Find all conversations where the user is a participant
+      const userConversations = await db.select({
+        id: conversations.id
+      })
+      .from(conversations)
+      .where(
+        or(
+          eq(conversations.participant1Id, userId),
+          eq(conversations.participant2Id, userId)
+        )
+      );
+      
+      const conversationIds = userConversations.map(conv => conv.id);
+      
+      if (conversationIds.length === 0) {
+        return 0;
+      }
+      
+      // Count unread messages in those conversations where the user is not the sender
+      const unreadCount = await db.select({
+        count: count()
+      })
+      .from(messages)
+      .where(
+        and(
+          inArray(messages.conversationId, conversationIds),
+          ne(messages.senderId, userId),
+          isNull(messages.readAt)
+        )
+      );
+      
+      return unreadCount[0]?.count || 0;
+    } catch (error) {
+      console.error('Error in getUnreadMessageCount:', error);
+      return 0;
+    }
   }
 
   // Notifications implementation
@@ -1327,106 +1537,208 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Favorites/Saved Videos Methods
-  async addFavorite(favoriteData: InsertFavorite): Promise<Favorite | undefined> {
+  async addFavorite(favoriteData: InsertFavorite): Promise<Favorite> {
+    console.log(`Storage: Adding favorite for user ${favoriteData.userId} and video ${favoriteData.videoId}`);
+    console.log(`Input data types: userId (${typeof favoriteData.userId}), videoId (${typeof favoriteData.videoId})`);
+    
+    // Create a properly typed favorite object with required fields
+    const favoriteToInsert = {
+      userId: favoriteData.userId,
+      videoId: favoriteData.videoId,
+      createdAt: new Date()
+    };
+    
+    console.log('Inserting favorite with data:', favoriteToInsert);
+    
     try {
-      console.log(`Storage: Adding favorite for user ${favoriteData.userId} and video ${favoriteData.videoId}`);
-      
-      // Validate input data
-      if (!favoriteData.userId || typeof favoriteData.userId !== 'string') {
-        console.error('Invalid userId in addFavorite:', favoriteData.userId);
-        return undefined;
+      // First, try to create the favorites table if it doesn't exist
+      try {
+        console.log('Checking if favorites table exists and creating it if needed...');
+        await db.execute(sql`
+          CREATE TABLE IF NOT EXISTS favorites (
+            id SERIAL PRIMARY KEY,
+            user_id VARCHAR NOT NULL,
+            video_id INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW(),
+            CONSTRAINT favorites_user_video_idx UNIQUE (user_id, video_id)
+          );
+        `);
+        console.log('Favorites table check/creation completed');
+      } catch (tableError) {
+        console.error('Error checking/creating favorites table:', tableError);
+        // Continue with the insert attempt even if table creation fails
       }
       
-      if (favoriteData.videoId === undefined || typeof favoriteData.videoId !== 'number') {
-        console.error('Invalid videoId in addFavorite:', favoriteData.videoId);
-        return undefined;
-      }
-      
-      // Check if already favorited
-      const existingFavorite = await db
-        .select()
-        .from(favorites)
-        .where(
-          and(
-            eq(favorites.userId, favoriteData.userId),
-            eq(favorites.videoId, favoriteData.videoId)
+      try {
+        // First check if favorite already exists
+        const existingFavorite = await db
+          .select()
+          .from(favorites)
+          .where(
+            and(
+              eq(favorites.userId, favoriteData.userId),
+              eq(favorites.videoId, favoriteData.videoId)
+            )
           )
-        )
-        .limit(1);
-
-      if (existingFavorite.length > 0) {
-        console.log('Favorite already exists, returning existing record');
-        return existingFavorite[0];
+          .limit(1);
+        
+        if (existingFavorite.length > 0) {
+          console.log('Favorite already exists, returning existing record');
+          return existingFavorite[0];
+        }
+        
+        // Insert new favorite if it doesn't exist
+        const [favorite] = await db
+          .insert(favorites)
+          .values(favoriteToInsert)
+          .returning();
+        
+        console.log('New favorite created:', favorite);
+        return favorite;
+      } catch (ormError) {
+        console.log('ORM operations failed, trying raw SQL insert...', ormError);
+        
+        // If ORM operations fail, try raw SQL
+        const rawResult = await db.execute(sql`
+          INSERT INTO favorites (user_id, video_id, created_at)
+          VALUES (${favoriteToInsert.userId}, ${favoriteToInsert.videoId}, ${favoriteToInsert.createdAt})
+          ON CONFLICT (user_id, video_id) DO NOTHING
+          RETURNING id, user_id as "userId", video_id as "videoId", created_at as "createdAt"
+        `);
+        
+        if (rawResult.rows && rawResult.rows.length > 0) {
+          console.log('Raw SQL insert successful:', rawResult.rows[0]);
+          return rawResult.rows[0] as Favorite;
+        } else {
+          // Check if it already exists
+          const checkResult = await db.execute(sql`
+            SELECT id, user_id as "userId", video_id as "videoId", created_at as "createdAt"
+            FROM favorites
+            WHERE user_id = ${favoriteToInsert.userId} AND video_id = ${favoriteToInsert.videoId}
+          `);
+          
+          if (checkResult.rows && checkResult.rows.length > 0) {
+            console.log('Found existing favorite with raw SQL:', checkResult.rows[0]);
+            return checkResult.rows[0] as Favorite;
+          } else {
+            throw new Error('Failed to insert or find favorite with raw SQL');
+          }
+        }
       }
-
-      console.log('Creating new favorite record');
-      // Insert new favorite
-      const [favorite] = await db
-        .insert(favorites)
-        .values({
-          userId: favoriteData.userId,
-          videoId: favoriteData.videoId
-        })
-        .returning();
-
-      console.log('New favorite created:', favorite);
-      return favorite;
-    } catch (error) {
-      console.error('Error adding favorite:', error);
-      return undefined;
+    } catch (error: unknown) {
+      console.error('Error in addFavorite:');
+      if (error instanceof Error) {
+        console.error(`Error type: ${error.constructor.name}`);
+        console.error(`Error message: ${error.message}`);
+        console.error(`Error stack: ${error.stack || 'No stack trace available'}`);
+      } else {
+        console.error('Unknown error type:', error);
+      }
+      
+      // Check for database-specific error properties
+      const dbError = error as any;
+      if (dbError) {
+        if (dbError.code) {
+          console.error(`Database error code: ${dbError.code}`);
+        }
+        if (dbError.constraint) {
+          console.error(`Database constraint: ${dbError.constraint}`);
+        }
+        if (dbError.detail) {
+          console.error(`Database error detail: ${dbError.detail}`);
+        }
+        if (dbError.table) {
+          console.error(`Database table: ${dbError.table}`);
+        }
+        if (dbError.column) {
+          console.error(`Database column: ${dbError.column}`);
+        }
+      }
+      
+      // Re-throw the error to be handled by the caller
+      throw error;
     }
   }
 
   async removeFavorite(userId: string, videoId: number): Promise<boolean> {
+    console.log(`Storage: Removing favorite for user ${userId} and video ${videoId}`);
+    console.log(`Input data types: userId (${typeof userId}), videoId (${typeof videoId})`);
+    
     try {
-      console.log(`Storage: Removing favorite for user ${userId} and video ${videoId}`);
-      
-      // Validate input data
-      if (!userId || typeof userId !== 'string') {
-        console.error('Invalid userId in removeFavorite:', userId);
-        return false;
+      // First, verify the favorites table exists
+      try {
+        console.log('Checking if favorites table exists and creating it if needed...');
+        await db.execute(sql`
+          CREATE TABLE IF NOT EXISTS favorites (
+            id SERIAL PRIMARY KEY,
+            user_id VARCHAR NOT NULL,
+            video_id INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW(),
+            CONSTRAINT favorites_user_video_idx UNIQUE (user_id, video_id)
+          );
+        `);
+        console.log('Favorites table check/creation completed');
+      } catch (tableError) {
+        console.error('Error checking/creating favorites table:', tableError);
+        // Continue with the delete attempt even if table creation fails
       }
       
-      if (videoId === undefined || typeof videoId !== 'number') {
-        console.error('Invalid videoId in removeFavorite:', videoId);
-        return false;
+      try {
+        // Delete the favorite record using ORM
+        const result = await db
+          .delete(favorites)
+          .where(
+            and(
+              eq(favorites.userId, userId),
+              eq(favorites.videoId, videoId)
+            )
+          );
+        
+        const success = result.rowCount !== null && result.rowCount > 0;
+        console.log(`Deletion result: ${success ? 'successful' : 'failed'}`);
+        return success;
+      } catch (ormError) {
+        console.log('ORM delete failed, trying raw SQL delete...', ormError);
+        
+        // If ORM delete fails, try raw SQL
+        const rawResult = await db.execute(sql`
+          DELETE FROM favorites 
+          WHERE user_id = ${userId} AND video_id = ${videoId}
+        `);
+        
+        const success = rawResult.rowCount !== null && rawResult.rowCount > 0;
+        console.log(`Raw SQL deletion result: ${success ? 'successful' : 'failed'}`);
+        return success;
+      }
+    } catch (error: unknown) {
+      console.error('Error removing favorite:');
+      if (error instanceof Error) {
+        console.error(`Error type: ${error.constructor.name}`);
+        console.error(`Error message: ${error.message}`);
+        console.error(`Error stack: ${error.stack || 'No stack trace available'}`);
+      } else {
+        console.error('Unknown error type:', error);
       }
       
-      // First check if the favorite exists
-      const existingFavorite = await db
-        .select()
-        .from(favorites)
-        .where(
-          and(
-            eq(favorites.userId, userId),
-            eq(favorites.videoId, videoId)
-          )
-        )
-        .limit(1);
-
-      if (existingFavorite.length === 0) {
-        console.log('Favorite does not exist, nothing to remove');
-        return false;
+      // Check for database-specific error properties
+      const pgError = error as any;
+      if (pgError) {
+        if (pgError.code) {
+          console.error(`Database error code: ${pgError.code}`);
+        }
+        if (pgError.constraint) {
+          console.error(`Database constraint: ${pgError.constraint}`);
+        }
+        if (pgError.detail) {
+          console.error(`Database error detail: ${pgError.detail}`);
+        }
+        if (pgError.table) {
+          console.error(`Database table: ${pgError.table}`);
+        }
       }
       
-      console.log('Favorite exists, proceeding with deletion');
-      
-      // Delete the favorite
-      const result = await db
-        .delete(favorites)
-        .where(
-          and(
-            eq(favorites.userId, userId),
-            eq(favorites.videoId, videoId)
-          )
-        );
-
-      const success = result.rowCount !== null && result.rowCount > 0;
-      console.log(`Deletion result: ${success ? 'successful' : 'failed'}`);
-      return success;
-    } catch (error) {
-      console.error('Error removing favorite:', error);
-      return false;
+      // Re-throw the error to be handled by the caller
+      throw error;
     }
   }
 
