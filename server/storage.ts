@@ -574,6 +574,10 @@ export class DatabaseStorage implements IStorage {
       const videoData = videoToDelete[0];
       console.log(`Found video to delete: ${JSON.stringify(videoData)}`);
       
+      // Store file paths before deleting database records
+      const videoUrl = videoData.videoUrl;
+      const thumbnailUrl = videoData.thumbnailUrl;
+      
       // Delete the record from the database
       const result = await db
         .delete(videos)
@@ -594,16 +598,34 @@ export class DatabaseStorage implements IStorage {
         // Delete related records (likes, comments, favorites, etc.)
         try {
           // Delete likes
-          await db.delete(likes).where(eq(likes.videoId, id));
-          console.log(`Deleted likes for video ${id}`);
+          const likesResult = await db.delete(likes).where(eq(likes.videoId, id));
+          console.log(`Deleted ${likesResult.rowCount || 0} likes for video ${id}`);
           
           // Delete comments
-          await db.delete(comments).where(eq(comments.videoId, id));
-          console.log(`Deleted comments for video ${id}`);
+          const commentsResult = await db.delete(comments).where(eq(comments.videoId, id));
+          console.log(`Deleted ${commentsResult.rowCount || 0} comments for video ${id}`);
           
-          // Delete favorites
-          await db.delete(favorites).where(eq(favorites.videoId, id));
-          console.log(`Deleted favorites for video ${id}`);
+          // Delete favorites - handle case where table might not exist
+          try {
+            const favoritesResult = await db.delete(favorites).where(eq(favorites.videoId, id));
+            console.log(`Deleted ${favoritesResult.rowCount || 0} favorites for video ${id}`);
+          } catch (favError) {
+            // If the favorites table doesn't exist, this is fine
+            if ((favError as any)?.code === '42P01') { // relation does not exist
+              console.log('Favorites table does not exist, skipping favorites deletion');
+            } else {
+              console.error(`Error deleting favorites for video ${id}:`, favError);
+            }
+          }
+          
+          // Delete video views
+          const viewsResult = await db.delete(videoViews).where(eq(videoViews.videoId, id));
+          console.log(`Deleted ${viewsResult.rowCount || 0} views for video ${id}`);
+          
+          // Delete video tags
+          const tagsResult = await db.delete(videoTags).where(eq(videoTags.videoId, id));
+          console.log(`Deleted ${tagsResult.rowCount || 0} tags for video ${id}`);
+          
         } catch (error) {
           console.error(`Error deleting related records for video ${id}:`, error);
           // Continue with file deletion even if related records deletion fails
@@ -611,22 +633,30 @@ export class DatabaseStorage implements IStorage {
         
         // Now delete the actual files from storage
         try {
-          const fs = require('fs');
-          const path = require('path');
+          // Use direct imports at the top of the file instead of dynamic imports
+          const fs = await import('fs');
+          const path = await import('path');
+          
+          // Use the exact absolute path to the uploads directory that we found
+          const uploadsDir = '/Users/qadirdadkazi/Desktop/Github Clone/Reelish/uploads';
+          console.log(`Using uploads directory: ${uploadsDir}`);
           
           // Extract filenames from URLs
-          const videoUrl = videoData.videoUrl;
-          const thumbnailUrl = videoData.thumbnailUrl;
-          
           if (videoUrl) {
             const videoFilename = videoUrl.split('/').pop();
             if (videoFilename) {
-              const videoPath = path.join(__dirname, '../uploads', videoFilename);
-              if (fs.existsSync(videoPath)) {
-                fs.unlinkSync(videoPath);
-                console.log(`Deleted video file: ${videoPath}`);
-              } else {
-                console.log(`Video file not found: ${videoPath}`);
+              const videoPath = path.join(uploadsDir, videoFilename);
+              console.log(`Attempting to delete video file at: ${videoPath}`);
+              
+              try {
+                if (fs.existsSync(videoPath)) {
+                  fs.unlinkSync(videoPath);
+                  console.log(`Successfully deleted video file: ${videoPath}`);
+                } else {
+                  console.log(`Video file does not exist at path: ${videoPath}`);
+                }
+              } catch (err) {
+                console.error(`Error deleting video file ${videoPath}:`, err);
               }
             }
           }
@@ -634,12 +664,44 @@ export class DatabaseStorage implements IStorage {
           if (thumbnailUrl) {
             const thumbnailFilename = thumbnailUrl.split('/').pop();
             if (thumbnailFilename) {
-              const thumbnailPath = path.join(__dirname, '../uploads', thumbnailFilename);
-              if (fs.existsSync(thumbnailPath)) {
-                fs.unlinkSync(thumbnailPath);
-                console.log(`Deleted thumbnail file: ${thumbnailPath}`);
-              } else {
-                console.log(`Thumbnail file not found: ${thumbnailPath}`);
+              const thumbnailPath = path.join(uploadsDir, thumbnailFilename);
+              console.log(`Attempting to delete thumbnail file at: ${thumbnailPath}`);
+              
+              try {
+                if (fs.existsSync(thumbnailPath)) {
+                  fs.unlinkSync(thumbnailPath);
+                  console.log(`Successfully deleted thumbnail file: ${thumbnailPath}`);
+                } else {
+                  console.log(`Thumbnail file does not exist at path: ${thumbnailPath}`);
+                }
+              } catch (err) {
+                console.error(`Error deleting thumbnail file ${thumbnailPath}:`, err);
+              }
+            }
+          }
+          
+          // Also check for any related files that might have been created
+          // (like the empty .jpg.jpg files we saw in the directory listing)
+          if (videoUrl) {
+            const videoFilename = videoUrl.split('/').pop();
+            if (videoFilename) {
+              // Check for variations of the filename
+              const variations = [
+                `${videoFilename}.jpg`,
+                `${videoFilename}.png`,
+                `${videoFilename}.webp`
+              ];
+              
+              for (const variant of variations) {
+                const variantPath = path.join(uploadsDir, variant);
+                try {
+                  if (fs.existsSync(variantPath)) {
+                    fs.unlinkSync(variantPath);
+                    console.log(`Deleted related file: ${variantPath}`);
+                  }
+                } catch (err) {
+                  console.error(`Error deleting related file ${variantPath}:`, err);
+                }
               }
             }
           }

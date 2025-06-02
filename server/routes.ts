@@ -669,20 +669,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.delete('/api/videos/:id', requireAuth, async (req, res) => {
     try {
+      console.log(`DELETE /api/videos/:id - Starting video deletion process`);
       const videoId = parseInt(req.params.id);
       if (isNaN(videoId)) {
+        console.log(`Invalid video ID format: ${req.params.id}`);
         return res.status(400).json({ message: "Invalid video ID" });
       }
       
+      console.log(`Attempting to delete video ${videoId} for user ${req.user!.id}`);
       const deleted = await dbStorage.deleteVideo(videoId, req.user!.id);
+      
       if (!deleted) {
+        console.log(`Video ${videoId} not found or user ${req.user!.id} doesn't have permission to delete it`);
         return res.status(404).json({ message: "Video not found or you don't have permission to delete it" });
       }
       
-      res.json({ message: "Video deleted successfully" });
+      console.log(`Video ${videoId} successfully deleted from database and storage`);
+      res.json({ 
+        success: true, 
+        message: "Video deleted successfully", 
+        videoId: videoId 
+      });
     } catch (error) {
       console.error("Delete video error:", error);
-      res.status(500).json({ message: "Failed to delete video" });
+      res.status(500).json({ 
+        success: false, 
+        message: "Failed to delete video", 
+        error: error instanceof Error ? error.message : String(error)
+      });
     }
   });
 
