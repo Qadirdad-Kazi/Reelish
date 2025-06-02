@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { Heart, MessageCircle, Share, Music, Play, VolumeX, Volume2, Bookmark } from "lucide-react";
+import { Heart, MessageCircle, Share, Music, Play, VolumeX, Volume2, Bookmark, MoreVertical, Eye, EyeOff } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
@@ -18,6 +19,7 @@ interface VideoPlayerProps {
     hashtags?: string[] | null;
     isLiked?: boolean;
     isFavorite?: boolean;
+    isPrivate?: boolean;
     likesCount: number | null;
     commentsCount: number | null;
     sharesCount: number | null;
@@ -41,6 +43,7 @@ export default function VideoPlayer({ video, isActive = false }: VideoPlayerProp
   const [isFavorite, setIsFavorite] = useState(video.isFavorite || false);
   const [isFollowing, setIsFollowing] = useState(video.isFollowing || false);
   const [videoError, setVideoError] = useState(false);
+  const [isPrivate, setIsPrivate] = useState(video.isPrivate || false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const { user } = useAuth();
   const { toast } = useToast();
@@ -334,6 +337,66 @@ export default function VideoPlayer({ video, isActive = false }: VideoPlayerProp
   };
 
   const [showShareOptions, setShowShareOptions] = useState(false);
+  
+  // Function to toggle video privacy
+  const togglePrivacy = async () => {
+    if (!user) {
+      toast({
+        title: "Authentication required",
+        description: "Please log in to change video privacy settings",
+        variant: "destructive"
+      });
+      return;
+    }
+    
+    // Only allow the video owner to change privacy
+    if (user.id !== video.user.id) {
+      toast({
+        title: "Permission denied",
+        description: "You can only change privacy settings for your own videos",
+        variant: "destructive"
+      });
+      return;
+    }
+    
+    try {
+      const response = await fetch(`/api/videos/${video.id}/privacy`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({ isPrivate: !isPrivate })
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Error updating privacy: ${response.statusText}`);
+      }
+      
+      await response.json(); // Get result but we don't need to use it
+      
+      // Update local state
+      setIsPrivate(!isPrivate);
+      
+      // Show success message
+      toast({
+        title: "Privacy updated",
+        description: `Video is now ${!isPrivate ? 'private' : 'public'}`,
+        variant: "default"
+      });
+      
+      // Invalidate queries to refresh video data
+      queryClient.invalidateQueries({ queryKey: [`/api/videos`] });
+      
+    } catch (error) {
+      console.error('Error updating video privacy:', error);
+      toast({
+        title: "Error updating privacy",
+        description: (error as Error).message || "Something went wrong",
+        variant: "destructive"
+      });
+    }
+  };
 
   const shareVideo = () => {
     // Toggle share options dropdown
@@ -629,6 +692,37 @@ export default function VideoPlayer({ video, isActive = false }: VideoPlayerProp
           </button>
           <span className="text-white text-xs"></span>
         </div>
+        
+        {/* Options Menu (3-dots) */}
+        {user && user.id === video.user.id && (
+          <div className="relative mt-4">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  className="bg-transparent text-white p-2 rounded-full hover:bg-gray-800 transition-colors"
+                >
+                  <MoreVertical className="w-8 h-8" />
+                  <span className="sr-only">Options</span>
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="bg-gray-900 text-white border-gray-700">
+                <DropdownMenuItem onClick={togglePrivacy} className="cursor-pointer hover:bg-gray-800 focus:bg-gray-800">
+                  {isPrivate ? (
+                    <>
+                      <Eye className="mr-2 h-4 w-4" />
+                      <span>Make Public</span>
+                    </>
+                  ) : (
+                    <>
+                      <EyeOff className="mr-2 h-4 w-4" />
+                      <span>Make Private</span>
+                    </>
+                  )}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        )}
 
         {/* Music Icon for Creating with Sound */}
         {video.musicName && (

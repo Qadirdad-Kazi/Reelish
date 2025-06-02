@@ -38,6 +38,7 @@ export interface IStorage {
   
   // Videos
   getVideo(id: number): Promise<Video | undefined>;
+  updateVideoPrivacy(id: number, userId: string, isPrivate: boolean): Promise<Video | undefined>;
   getVideoWithUser(id: number, currentUserId?: string): Promise<VideoWithUser | undefined>;
   getVideosByUser(userId: string, currentUserId?: string): Promise<VideoWithUser[]>;
   getFeedVideos(offset?: number, limit?: number, currentUserId?: string): Promise<VideoWithUser[]>;
@@ -551,6 +552,80 @@ export class DatabaseStorage implements IStorage {
       return video;
     } catch (error) {
       console.error('Error updating video:', error);
+      return undefined;
+    }
+  }
+
+  async updateVideoPrivacy(id: number, userId: string, isPrivate: boolean): Promise<Video | undefined> {
+    try {
+      console.log(`[updateVideoPrivacy] START - Updating privacy for video ${id} by user ${userId} to ${isPrivate ? 'private' : 'public'}`);
+      
+      if (typeof id !== 'number' || isNaN(id)) {
+        console.error(`[updateVideoPrivacy] Invalid video ID format: ${id}, type: ${typeof id}`);
+        return undefined;
+      }
+      
+      if (!userId || typeof userId !== 'string') {
+        console.error(`[updateVideoPrivacy] Invalid user ID: ${userId}`);
+        return undefined;
+      }
+      
+      // First, get the video to check ownership
+      console.log(`[updateVideoPrivacy] Fetching video with ID: ${id}`);
+      const existingVideo = await this.getVideo(id);
+      
+      if (!existingVideo) {
+        console.error(`[updateVideoPrivacy] Video not found for privacy update: ${id}`);
+        return undefined;
+      }
+      
+      console.log(`[updateVideoPrivacy] Found video: ${JSON.stringify({
+        id: existingVideo.id,
+        userId: existingVideo.userId,
+        title: existingVideo.title,
+        currentPrivacy: existingVideo.isPrivate
+      })}`);
+      
+      // Verify the user owns the video
+      if (existingVideo.userId !== userId) {
+        console.error(`[updateVideoPrivacy] User ${userId} does not own video ${id} (owned by ${existingVideo.userId}). Cannot update privacy settings.`);
+        return undefined;
+      }
+      
+      console.log(`[updateVideoPrivacy] User verified as owner. Updating privacy to: ${isPrivate}`);
+      
+      // Update the video privacy setting
+      const updateResult = await db
+        .update(videos)
+        .set({
+          isPrivate: isPrivate,
+          updatedAt: new Date()
+        })
+        .where(and(
+          eq(videos.id, id),
+          eq(videos.userId, userId)
+        ))
+        .returning();
+      
+      console.log(`[updateVideoPrivacy] Update query executed. Result: ${JSON.stringify(updateResult)}`);
+      
+      if (!updateResult || updateResult.length === 0) {
+        console.error(`[updateVideoPrivacy] Update query did not return any results`);
+        return undefined;
+      }
+      
+      const [updatedVideo] = updateResult;
+      
+      console.log(`[updateVideoPrivacy] SUCCESS - Updated video privacy to ${isPrivate ? 'private' : 'public'}. New state: ${JSON.stringify({
+        id: updatedVideo.id,
+        userId: updatedVideo.userId,
+        title: updatedVideo.title,
+        newPrivacy: updatedVideo.isPrivate
+      })}`);
+      
+      return updatedVideo;
+    } catch (error) {
+      console.error(`[updateVideoPrivacy] ERROR - Failed to update video privacy:`, error);
       return undefined;
     }
   }

@@ -6,7 +6,7 @@ import 'react-image-crop/dist/ReactCrop.css';
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 // UI components
-import { Heart, Loader2, LogOut, MoreVertical, Trash, Edit, Play } from "lucide-react";
+import { Heart, Loader2, LogOut, MoreVertical, Trash, Edit, Play, Eye } from "lucide-react";
 import MiniPlayer from "@/components/MiniPlayer";
 import { formatNumber } from "@/lib/utils";
 import BottomNavigation from "@/components/BottomNavigation";
@@ -687,12 +687,20 @@ export default function Profile() {
         <div className="flex flex-col items-center space-y-2">
           <Avatar className="h-16 w-16 md:h-20 md:w-20 border-2 border-background relative overflow-hidden">
             <AvatarImage 
-              src={user?.profileImageUrl ? `${window.location.origin}${user.profileImageUrl}` : `https://ui-avatars.com/api/?name=${user?.username}`} 
+              src={user?.profileImageUrl 
+                ? `${window.location.origin}${user.profileImageUrl}?t=${Date.now()}` // Add cache-busting
+                : `https://ui-avatars.com/api/?name=${user?.username}`
+              } 
               alt={user?.username || 'User'}
               className="object-cover w-full h-full"
               onError={(e) => {
                 console.error('Image failed to load:', user?.profileImageUrl);
-                e.currentTarget.src = `https://ui-avatars.com/api/?name=${user?.username}`;
+                // Try without cache-busting if it fails
+                if (user?.profileImageUrl && e.currentTarget.src.includes('?t=')) {
+                  e.currentTarget.src = `${window.location.origin}${user.profileImageUrl}`;
+                } else {
+                  e.currentTarget.src = `https://ui-avatars.com/api/?name=${user?.username}`;
+                }
               }}
             />
             <AvatarFallback>{user?.username?.substring(0, 2).toUpperCase()}</AvatarFallback>
@@ -987,15 +995,47 @@ export default function Profile() {
                             <DropdownMenuContent align="start" className="w-32">
                               <DropdownMenuItem
                                 className="text-xs cursor-pointer flex items-center gap-1"
-                                onClick={() => {
-                                  toast({
-                                    title: "Make Public",
-                                    description: "This feature is coming soon",
-                                    duration: 3000
-                                  });
+                                onClick={async () => {
+                                  try {
+                                    const response = await fetch(`/api/videos/${video.id}/privacy`, {
+                                      method: 'PATCH',
+                                      headers: {
+                                        'Content-Type': 'application/json',
+                                      },
+                                      credentials: 'include',
+                                      body: JSON.stringify({ isPrivate: false })
+                                    });
+                                    
+                                    if (!response.ok) {
+                                      throw new Error(`Error updating privacy: ${response.statusText}`);
+                                    }
+                                    
+                                    await response.json();
+                                    
+                                    // Update local state by removing from private videos
+                                    setPrivateVideos(prev => prev.filter(v => v.id !== video.id));
+                                    
+                                    // Invalidate queries to refresh video data
+                                    queryClient.invalidateQueries({ queryKey: [`/api/videos`] });
+                                    queryClient.invalidateQueries({ queryKey: [`user-${userId}-videos`] });
+                                    
+                                    toast({
+                                      title: "Video made public",
+                                      description: "Your video is now visible to everyone",
+                                      duration: 3000
+                                    });
+                                  } catch (error) {
+                                    console.error('Error updating video privacy:', error);
+                                    toast({
+                                      title: "Error making video public",
+                                      description: (error as Error).message || "Something went wrong",
+                                      variant: "destructive",
+                                      duration: 3000
+                                    });
+                                  }
                                 }}
                               >
-                                <Edit className="h-3 w-3 mr-1" /> Make Public
+                                <Eye className="h-3 w-3 mr-1" /> Make Public
                               </DropdownMenuItem>
                               <DropdownMenuItem
                                 className="text-xs cursor-pointer flex items-center gap-1 text-red-500 focus:text-red-500"

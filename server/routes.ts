@@ -490,6 +490,71 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Video Routes
+  
+  // Update video privacy status
+  app.patch('/api/videos/:id/privacy', requireAuth, async (req, res) => {
+    try {
+      console.log(`[ROUTE] /api/videos/:id/privacy - Request received:`, {
+        params: req.params,
+        body: req.body,
+        user: req.user ? { id: req.user.id } : null
+      });
+      
+      // Parse and validate video ID
+      const videoId = parseInt(req.params.id);
+      if (isNaN(videoId)) {
+        console.error(`[ROUTE] Invalid video ID format: ${req.params.id}`);
+        return res.status(400).json({ message: 'Invalid video ID format' });
+      }
+      
+      // Validate user is authenticated
+      if (!req.user || !req.user.id) {
+        console.error(`[ROUTE] User not authenticated properly`);
+        return res.status(401).json({ message: 'Authentication required' });
+      }
+      const userId = req.user.id;
+      
+      // Validate isPrivate parameter
+      const { isPrivate } = req.body;
+      console.log(`[ROUTE] Received isPrivate value:`, isPrivate, `type:`, typeof isPrivate);
+      
+      if (typeof isPrivate !== 'boolean') {
+        console.error(`[ROUTE] isPrivate must be a boolean, received: ${typeof isPrivate}`);
+        return res.status(400).json({ 
+          message: 'isPrivate must be a boolean value',
+          received: isPrivate,
+          type: typeof isPrivate
+        });
+      }
+      
+      console.log(`[ROUTE] Calling dbStorage.updateVideoPrivacy with:`, { videoId, userId, isPrivate });
+      const updatedVideo = await dbStorage.updateVideoPrivacy(videoId, userId, isPrivate);
+      
+      if (!updatedVideo) {
+        console.error(`[ROUTE] updateVideoPrivacy returned no video`);
+        return res.status(404).json({ 
+          message: 'Video not found or you do not have permission to update this video' 
+        });
+      }
+      
+      console.log(`[ROUTE] Successfully updated video privacy. Response:`, {
+        id: updatedVideo.id,
+        isPrivate: updatedVideo.isPrivate
+      });
+      
+      res.json({
+        message: `Video is now ${isPrivate ? 'private' : 'public'}`,
+        video: updatedVideo
+      });
+    } catch (error) {
+      console.error('[ROUTE] Error updating video privacy:', error);
+      res.status(500).json({ 
+        message: 'Failed to update video privacy', 
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+  
   app.get('/api/videos', optionalAuth, async (req, res) => {
     try {
       const page = parseInt(req.query.page as string) || 1;
