@@ -4,7 +4,7 @@ import {
   type User, type Video, type Comment, type Like, type Follow,
   type InsertUser, type InsertVideo, type InsertComment, type InsertLike, type InsertFollow,
   type VideoWithUser, type CommentWithUser
-} from "./shared/schema";
+} from "./shared/schema.js";
 
 export interface IStorage {
   // Users

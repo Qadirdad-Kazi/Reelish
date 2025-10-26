@@ -1,13 +1,13 @@
 import { 
   users, videos, comments, likes, follows, favorites, videoViews, conversations, messages, notifications, tags, 
   videoTags, trendingHashtags, passwordResetTokens
-} from './shared/schema';
+} from './shared/schema.js';
 import {
   type User, type Video, type Comment, type Like, type Follow, type Favorite,
   type InsertUser, type InsertVideo, type InsertComment, type InsertLike, type InsertFollow,
   type InsertFavorite, type VideoWithUser, type CommentWithUser, type UserWithStats, type InsertVideoView,
   type InsertNotification, type VideoView, type Tag
-} from "./shared/schema";
+} from "./shared/schema.js";
 
 // Define a proper InsertMessage interface to fix TypeScript errors
 interface InsertMessage {
