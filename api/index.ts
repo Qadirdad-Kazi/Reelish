@@ -24,6 +24,16 @@ app.use((req, res, next) => {
   next();
 });
 
+// Initialize routes
+let initialized = false;
+const initPromise = registerRoutes(app).then(() => {
+  initialized = true;
+  console.log('✅ Routes initialized');
+}).catch(err => {
+  console.error('❌ Failed to initialize routes:', err);
+  throw err;
+});
+
 // Add a simple root route
 app.get('/', (req, res) => {
   res.json({
@@ -39,17 +49,6 @@ app.get('/', (req, res) => {
   });
 });
 
-// Initialize routes
-let routesInitialized = false;
-
-const initializeRoutes = async () => {
-  if (!routesInitialized) {
-    await registerRoutes(app);
-    routesInitialized = true;
-    console.log('✅ Routes initialized');
-  }
-};
-
 // Error handler
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   const status = err.status || err.statusCode || 500;
@@ -62,9 +61,14 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   console.error('Error:', err);
 });
 
-// Export for Vercel serverless
-export default async (req: Request, res: Response) => {
-  await initializeRoutes();
+// Wait for initialization before handling requests
+const handler = async (req: Request, res: Response) => {
+  if (!initialized) {
+    await initPromise;
+  }
   return app(req, res);
 };
+
+// Export for Vercel serverless
+export default handler;
 
