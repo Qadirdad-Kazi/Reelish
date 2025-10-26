@@ -5,9 +5,26 @@ import { registerRoutes } from "../server/routes.js";
 
 const app = express();
 
-// CORS configuration
+// Trust Vercel proxy for secure cookies
+app.set('trust proxy', 1);
+
+// CORS configuration - must match EXACTLY
 const corsOptions = {
-  origin: process.env.FRONTEND_URL || true, // Allow any origin in development
+  origin: (origin, callback) => {
+    const allowedOrigins = [
+      process.env.FRONTEND_URL,
+      'https://reeliah.netlify.app', // Your Netlify domain
+      'http://localhost:5173', // Local development
+    ].filter(Boolean);
+    
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      console.log('Blocked origin:', origin);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
   optionsSuccessStatus: 200,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],

@@ -43,6 +43,7 @@ const pgPool = new Pool({
 });
 
 const sessionConfig = {
+  name: 'reelish.sid', // Custom session name
   secret: process.env.SESSION_SECRET || 'dev-secret-change-in-production',
   resave: false, // Don't save session if unmodified
   saveUninitialized: false, // Don't create session until something stored
@@ -51,8 +52,9 @@ const sessionConfig = {
     httpOnly: true,
     maxAge: 1000 * 60 * 60 * 24 * 7, // 1 week
     sameSite: process.env.NODE_ENV === 'production' ? 'none' as const : 'lax' as const, // 'none' for cross-site in production
-    domain: process.env.COOKIE_DOMAIN || undefined, // Allow setting cookie domain
+    path: '/', // Explicitly set path
   },
+  proxy: true, // Trust the proxy (Vercel)
   store: new PgSession({
     pool: pgPool,
     tableName: 'sessions', // Use existing sessions table from schema
@@ -299,6 +301,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     console.log('Auth check request received');
     console.log('Session exists:', !!req.session);
     console.log('Session ID:', req.sessionID);
+    console.log('Session data:', JSON.stringify(req.session));
+    console.log('Cookies received:', req.headers.cookie);
+    console.log('Origin:', req.headers.origin);
     
     // Check if we have a userId in the session
     const userId = req.session?.userId;
