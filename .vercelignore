@@ -5,10 +5,9 @@ client/
 .gitignore
 .env.example
 .env.development
-DEPLOYMENT*.md
-test-db.js
-db-test.js
-db-credentials-test.js
 server/scripts/
 server/dist/
+uploads/
+*.log
+*.lock
 
