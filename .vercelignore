@@ -1,16 +1,15 @@
-# Vercel ignore - exclude frontend from backend deployment
+# Vercel ignore - exclude frontend and unnecessary files
 client/
-node_modules/
 *.md
 .git/
 .gitignore
 .env.example
 .env.development
 DEPLOYMENT*.md
-vercel-simple.json
 test-db.js
 db-test.js
 db-credentials-test.js
 server/vite.config.ts
 server/scripts/
+server/dist/
 
