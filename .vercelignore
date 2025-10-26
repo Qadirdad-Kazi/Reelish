@@ -9,7 +9,6 @@ DEPLOYMENT*.md
 test-db.js
 db-test.js
 db-credentials-test.js
-server/vite.config.ts
 server/scripts/
 server/dist/
 
