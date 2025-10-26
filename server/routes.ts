@@ -10,7 +10,7 @@ import sharp from 'sharp';
 import path from "path";
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
-import { storage as dbStorage } from "./storage";
+import { storage as dbStorage } from "./storage.js";
 import { sql } from 'drizzle-orm';
 import { 
   users, videos, comments, likes, follows, videoViews, conversations, messages, 
@@ -20,12 +20,12 @@ import {
   type VideoWithUser, type CommentWithUser, type UserWithStats, type InsertVideoView,
   type InsertMessage, type InsertNotification, type Tag, type VideoView,
   insertVideoSchema, insertCommentSchema, insertLikeSchema, insertFollowSchema
-} from "./shared/schema";
+} from "./shared/schema.js";
 import { z } from "zod";
-import "./types";
-import { db } from "./db";
+import "./types.js";
+import { db } from "./db.js";
 import { and, eq, isNotNull, inArray } from 'drizzle-orm';
-import { requireAuth, optionalAuth, loginSchema, registerSchema, registerSchemaWithPasswordValidation, forgotPasswordSchema, resetPasswordSchema } from "./auth";
+import { requireAuth, optionalAuth, loginSchema, registerSchema, registerSchemaWithPasswordValidation, forgotPasswordSchema, resetPasswordSchema } from "./auth.js";
 
 // ES module equivalent of __dirname
 const __filename = fileURLToPath(import.meta.url);

@@ -1,8 +1,8 @@
 import { Request, Response, NextFunction } from "express";
-import { storage } from "./storage";
-import { insertUserSchema } from "./shared/schema";
+import { storage } from "./storage.js";
+import { insertUserSchema } from "./shared/schema.js";
 import { z } from "zod";
-import "./types";
+import "./types.js";
 
 // Authentication middleware
 export async function requireAuth(req: Request, res: Response, next: NextFunction) {

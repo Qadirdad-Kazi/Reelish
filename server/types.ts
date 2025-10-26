@@ -1,4 +1,4 @@
-import { User } from "./shared/schema";
+import { User } from "./shared/schema.js";
 import { Session, SessionData } from "express-session";
 
 declare global {

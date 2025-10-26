@@ -17,7 +17,7 @@ interface InsertMessage {
   createdAt?: Date;
 }
 
-import { db } from "./db";
+import { db } from "./db.js";
 import { and, asc, count, desc, eq, gt, gte, ilike, inArray, isNotNull, isNull, like, lt, lte, ne, not, or, sql, between } from 'drizzle-orm';
 import { nanoid } from "nanoid";
 import bcrypt from "bcryptjs";
