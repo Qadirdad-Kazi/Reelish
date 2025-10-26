@@ -2,7 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import express from "express";
 import session from "express-session";
-import memorystore from "memorystore";
+import connectPgSimple from "connect-pg-simple";
 import multer from 'multer';
 import { v2 as cloudinary } from 'cloudinary';
 import { CloudinaryStorage } from 'multer-storage-cloudinary';
@@ -12,6 +12,8 @@ import sharp from 'sharp';
 import path from "path";
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import pkg from 'pg';
+const { Pool } = pkg;
 import { storage as dbStorage } from "./storage.js";
 import { sql } from 'drizzle-orm';
 import { 
@@ -33,12 +35,17 @@ import { requireAuth, optionalAuth, loginSchema, registerSchema, registerSchemaW
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Configure session with memorystore
-const MemoryStore = memorystore(session);
+// Configure PostgreSQL session store (required for serverless)
+const PgSession = connectPgSimple(session);
+const pgPool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.DATABASE_URL?.includes('localhost') ? false : { rejectUnauthorized: false }
+});
+
 const sessionConfig = {
   secret: process.env.SESSION_SECRET || 'dev-secret-change-in-production',
-  resave: true,
-  saveUninitialized: true,
+  resave: false, // Don't save session if unmodified
+  saveUninitialized: false, // Don't create session until something stored
   cookie: {
     secure: process.env.NODE_ENV === 'production', // Use secure cookies in production
     httpOnly: true,
@@ -46,8 +53,10 @@ const sessionConfig = {
     sameSite: process.env.NODE_ENV === 'production' ? 'none' as const : 'lax' as const, // 'none' for cross-site in production
     domain: process.env.COOKIE_DOMAIN || undefined, // Allow setting cookie domain
   },
-  store: new MemoryStore({
-    checkPeriod: 86400000 // prune expired entries every 24h
+  store: new PgSession({
+    pool: pgPool,
+    tableName: 'sessions', // Use existing sessions table from schema
+    createTableIfMissing: false, // Table already exists in schema
   }),
 };
 
