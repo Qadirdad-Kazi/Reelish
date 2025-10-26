@@ -24,6 +24,21 @@ app.use((req, res, next) => {
   next();
 });
 
+// Add a simple root route
+app.get('/', (req, res) => {
+  res.json({
+    name: 'Reelish API',
+    version: '1.0.0',
+    status: 'running',
+    endpoints: {
+      status: '/api/status',
+      auth: '/api/auth/*',
+      videos: '/api/videos',
+      users: '/api/users'
+    }
+  });
+});
+
 // Initialize routes
 let routesInitialized = false;
 
