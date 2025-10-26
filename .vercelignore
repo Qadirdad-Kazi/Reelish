@@ -1,0 +1,9 @@
+# Vercel ignore - exclude frontend from backend deployment
+client/
+node_modules/
+*.md
+.git/
+.gitignore
+.env.example
+DEPLOYMENT*.md
+

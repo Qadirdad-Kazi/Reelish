@@ -38,10 +38,11 @@ const sessionConfig = {
   resave: true,
   saveUninitialized: true,
   cookie: {
-    secure: false, // Set to false for development, even in production since we're not using HTTPS
+    secure: process.env.NODE_ENV === 'production', // Use secure cookies in production
     httpOnly: true,
     maxAge: 1000 * 60 * 60 * 24 * 7, // 1 week
-    sameSite: 'lax' as const,
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' as const : 'lax' as const, // 'none' for cross-site in production
+    domain: process.env.COOKIE_DOMAIN || undefined, // Allow setting cookie domain
   },
   store: new MemoryStore({
     checkPeriod: 86400000 // prune expired entries every 24h

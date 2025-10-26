@@ -1,0 +1,7 @@
+# API and uploads proxy to backend
+/api/*  https://your-backend-app.vercel.app/api/:splat  200
+/uploads/*  https://your-backend-app.vercel.app/uploads/:splat  200
+
+# SPA fallback - must be last
+/*  /index.html  200
+

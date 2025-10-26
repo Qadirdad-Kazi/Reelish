@@ -1,0 +1,6 @@
+# Netlify ignore - exclude server from frontend deployment
+../server/
+../node_modules/
+../*.md
+../.git/
+
