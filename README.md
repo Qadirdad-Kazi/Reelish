@@ -43,7 +43,15 @@ DATABASE_URL=postgresql://user:password@host:port/database
 SESSION_SECRET=your-secret-key
 NODE_ENV=development
 FRONTEND_URL=http://localhost:5173
+CLOUDINARY_CLOUD_NAME=your-cloud-name
+CLOUDINARY_API_KEY=your-api-key
+CLOUDINARY_API_SECRET=your-api-secret
 ```
+
+**Get Cloudinary credentials** (free tier - 25GB storage):
+- Sign up at [cloudinary.com](https://cloudinary.com)
+- Go to Dashboard → Copy Cloud Name, API Key, and API Secret
+- Paste them into your `.env` file
 
 3. Run database migrations:
 ```bash

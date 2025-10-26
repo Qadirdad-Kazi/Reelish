@@ -4,6 +4,8 @@ import express from "express";
 import session from "express-session";
 import memorystore from "memorystore";
 import multer from 'multer';
+import { v2 as cloudinary } from 'cloudinary';
+import { CloudinaryStorage } from 'multer-storage-cloudinary';
 import fs from 'fs';
 import util from 'util';
 import sharp from 'sharp';
@@ -49,79 +51,54 @@ const sessionConfig = {
   }),
 };
 
-// Helper function to check if a file is HEIC format
-const isHeicImage = (file: Express.Multer.File): boolean => {
-  const ext = path.extname(file.originalname).toLowerCase();
-  return ext === '.heic' || ext === '.heif' || file.mimetype === 'image/heic' || file.mimetype === 'image/heif';
-};
+// Note: Image upload helpers removed - Cloudinary handles all conversions automatically
 
-// Helper function to handle HEIC images
-const handleImageUpload = (file: Express.Multer.File): string | null => {
-  try {
-    console.log(`Processing image upload: ${file.path}`);
-    // For HEIC images, we'll just use a fallback approach
-    // since browser support is limited
-    if (isHeicImage(file)) {
-      console.log('HEIC format detected, using fallback approach');
-      // Return a default avatar URL instead
-      return null;
-    }
-    
-    // For other image formats, return the path
-    return `/uploads/${path.basename(file.path)}`;
-  } catch (error) {
-    console.error('Error processing image:', error);
-    return null;
-  }
-};
-
-// Configure multer for profile image uploads
-const profileImageStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const uploadDir = path.join(__dirname, '../uploads');
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
-    }
-    cb(null, uploadDir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    // Always save as JPG for consistency
-    cb(null, uniqueSuffix + '.jpg');
-  }
+// Configure Cloudinary
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
+// Configure Cloudinary Storage for video/thumbnail uploads
+const cloudinaryStorage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: async (req, file) => {
+    // Determine folder and resource type based on file type
+    const isVideo = file.mimetype.startsWith('video/');
+    return {
+      folder: isVideo ? 'reelish/videos' : 'reelish/images',
+      resource_type: isVideo ? 'video' : 'image',
+      allowed_formats: isVideo ? ['mp4', 'mov', 'avi', 'wmv'] : ['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif'],
+      transformation: isVideo ? undefined : [{ width: 1080, quality: 'auto' }],
+    };
+  },
+});
+
+// Configure Cloudinary Storage for profile images
+const profileImageCloudinaryStorage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: 'reelish/profiles',
+    resource_type: 'image',
+    allowed_formats: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif'],
+    transformation: [{ width: 400, height: 400, crop: 'fill', quality: 'auto' }],
+  } as any,
+});
+
+// Profile image uploader
 const profileImageUpload = multer({
-  storage: profileImageStorage,
+  storage: profileImageCloudinaryStorage,
   limits: {
     fileSize: 5 * 1024 * 1024, // 5MB limit
   },
   fileFilter: (req, file, cb) => {
-    // Accept image files including HEIC format
-    if (file.mimetype.startsWith('image/') || 
-        file.originalname.toLowerCase().endsWith('.heic') || 
-        file.originalname.toLowerCase().endsWith('.heif')) {
+    if (file.mimetype.startsWith('image/')) {
       cb(null, true);
     } else {
       cb(new Error('Only image files are allowed'));
     }
   }
-});
-
-// Configure multer for file uploads
-const uploadDir = path.join(__dirname, "../uploads");
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
-
-const multerStorage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, uploadDir);
-  },
-  filename: function (req, file, cb) {
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, uniqueSuffix + path.extname(file.originalname));
-  },
 });
 
 // Add file filter and size limits
@@ -145,7 +122,7 @@ const fileFilter = (req: any, file: Express.Multer.File, cb: multer.FileFilterCa
 };
 
 const upload = multer({
-  storage: multerStorage,
+  storage: cloudinaryStorage,
   fileFilter: fileFilter,
   limits: {
     fileSize: 100 * 1024 * 1024, // 100MB max file size
@@ -162,95 +139,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     next();
   });
 
-  // Serve uploaded files with proper MIME types and caching
-  app.use('/uploads', (req, res, next) => {
-    console.log('Static file request for:', req.path);
-    // Add CORS headers for static files
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Methods', 'GET');
-    res.header('Access-Control-Allow-Headers', 'Content-Type');
-    next();
-  });
-  
-  // Use a more direct approach to serve static files
-  app.use('/uploads', express.static(path.join(__dirname, '../uploads'), {
-    setHeaders: (res, filePath) => {
-      // Set appropriate headers for different file types
-      if (filePath.endsWith('.mp4')) {
-        res.setHeader('Content-Type', 'video/mp4');
-      } else if (filePath.endsWith('.jpg') || filePath.endsWith('.jpeg')) {
-        res.setHeader('Content-Type', 'image/jpeg');
-      } else if (filePath.endsWith('.png')) {
-        res.setHeader('Content-Type', 'image/png');
-      } else if (filePath.endsWith('.gif')) {
-        res.setHeader('Content-Type', 'image/gif');
-      }
-      
-      // Add CORS headers directly to the file response
-      res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Access-Control-Allow-Methods', 'GET');
-      
-      // Allow browser to cache files for 1 hour
-      res.setHeader('Cache-Control', 'public, max-age=3600');
-      console.log('Serving file:', filePath);
-    }
-  }));
-  
-  // Add a dedicated route for video streaming with proper error handling
-  app.get('/api/stream/:filename', (req, res) => {
-    const filename = req.params.filename;
-    const filePath = path.join(__dirname, '../uploads', filename);
-    
-    console.log('Video stream request for:', filename);
-    
-    // Check if file exists
-    fs.access(filePath, fs.constants.F_OK, (err) => {
-      if (err) {
-        console.error('Video file not found:', filePath);
-        return res.status(404).json({ message: 'Video not found' });
-      }
-      
-      // Get file stats (including size)
-      fs.stat(filePath, (err, stats) => {
-        if (err) {
-          console.error('Error accessing video file:', err);
-          return res.status(500).json({ message: 'Error accessing video' });
-        }
-        
-        // Handle range requests for video streaming
-        const range = req.headers.range;
-        if (range) {
-          const parts = range.replace(/bytes=/, '').split('-');
-          const start = parseInt(parts[0], 10);
-          const end = parts[1] ? parseInt(parts[1], 10) : stats.size - 1;
-          const chunksize = (end - start) + 1;
-          
-          console.log(`Serving video range: ${start}-${end}/${stats.size}`);
-          
-          const fileStream = fs.createReadStream(filePath, { start, end });
-          res.writeHead(206, {
-            'Content-Range': `bytes ${start}-${end}/${stats.size}`,
-            'Accept-Ranges': 'bytes',
-            'Content-Length': chunksize,
-            'Content-Type': 'video/mp4',
-          });
-          
-          fileStream.pipe(res);
-        } else {
-          // Serve the entire file
-          console.log(`Serving entire video file: ${stats.size} bytes`);
-          
-          res.writeHead(200, {
-            'Content-Length': stats.size,
-            'Content-Type': 'video/mp4',
-            'Accept-Ranges': 'bytes',
-          });
-          
-          fs.createReadStream(filePath).pipe(res);
-        }
-      });
-    });
-  });
+  // Note: Static file serving removed - Cloudinary serves files via CDN
+  // Files are automatically available at their Cloudinary URLs
 
   // Authentication Routes
   app.post('/api/auth/register', async (req, res) => {
@@ -684,8 +574,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         description: req.body.description || '',
         isPrivate: req.body.isPrivate === 'true',
         allowComments: req.body.allowComments !== 'false',
-        videoUrl: `/uploads/${videoFile.filename}`,
-        thumbnailUrl: thumbnailFile ? `/uploads/${thumbnailFile.filename}` : null,
+        videoUrl: videoFile.path, // Cloudinary URL
+        thumbnailUrl: thumbnailFile ? thumbnailFile.path : null, // Cloudinary URL
         fileSize: videoFile.size,
         format: videoFile.mimetype.split('/')[1] || null,
         duration: parseInt(req.body.duration || '0'),
@@ -1251,11 +1141,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   
   // Update user profile
   app.put('/api/users/:id', requireAuth, profileImageUpload.single('profileImage'), async (req, res) => {
-    // Process the uploaded image if any
-    let profileImageUrl: string | null = null;
-    if (req.file) {
-      profileImageUrl = handleImageUpload(req.file);
-    }
+    // Get Cloudinary URL if image was uploaded
+    const profileImageUrl = req.file?.path || null;
     try {
       const userId = req.params.id;
       const currentUserId = req.user?.id;
