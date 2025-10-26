@@ -24,17 +24,11 @@ app.use((req, res, next) => {
   next();
 });
 
-// Initialize routes
-let initialized = false;
-const initPromise = registerRoutes(app).then(() => {
-  initialized = true;
-  console.log('✅ Routes initialized');
-}).catch(err => {
-  console.error('❌ Failed to initialize routes:', err);
-  throw err;
-});
+// Initialize routes using top-level await
+await registerRoutes(app);
+console.log('✅ Routes initialized');
 
-// Add a simple root route
+// Add a simple root route AFTER other routes
 app.get('/', (req, res) => {
   res.json({
     name: 'Reelish API',
@@ -61,14 +55,6 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   console.error('Error:', err);
 });
 
-// Wait for initialization before handling requests
-const handler = async (req: Request, res: Response) => {
-  if (!initialized) {
-    await initPromise;
-  }
-  return app(req, res);
-};
-
-// Export for Vercel serverless
-export default handler;
+// Export the Express app directly for Vercel
+export default app;
 
