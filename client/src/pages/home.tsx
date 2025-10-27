@@ -20,10 +20,6 @@ export default function Home() {
 
       {/* Main Content Area */}
       <main className="flex-1 md:ml-16 flex flex-col">
-        <div className="p-4 text-white text-center">
-          <h1 className="text-2xl font-bold mb-4">Discover Random Videos</h1>
-          <p className="text-gray-300 mb-6">Explore content from creators across the platform</p>
-        </div>
         <div className="flex-1 relative">
           <VideoFeed 
             currentUserId={user?.id} 

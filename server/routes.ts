@@ -8,7 +8,6 @@ import { v2 as cloudinary } from 'cloudinary';
 import { CloudinaryStorage } from 'multer-storage-cloudinary';
 import fs from 'fs';
 import util from 'util';
-import sharp from 'sharp';
 import path from "path";
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';

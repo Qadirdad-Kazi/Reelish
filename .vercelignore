@@ -1,13 +1,27 @@
-# Vercel ignore - exclude frontend and unnecessary files
-client/
-*.md
-.git/
+# Exclude development and build artifacts
+node_modules
+.git
 .gitignore
-.env.example
-.env.development
-server/scripts/
-server/dist/
-uploads/
 *.log
-*.lock
+*.md
+README.md
 
+# Exclude client files (deployed separately to Netlify)
+client/
+
+# Exclude server files (not needed for serverless function)
+server/node_modules
+server/dist
+server/uploads
+server/scripts
+
+# Exclude uploads directory
+uploads/
+
+# Exclude other non-essential files
+.vscode
+.idea
+*.test.ts
+*.test.js
+*.spec.ts
+*.spec.js

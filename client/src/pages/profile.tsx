@@ -683,7 +683,7 @@ export default function Profile() {
       <Header />
       
       {/* Profile Header - Smaller Size */}
-      <div className="container px-4 pt-2 pb-8 md:pt-4">
+      <div className="container px-4 pt-16 pb-8 md:pt-6">
         <div className="flex flex-col items-center space-y-2">
           <Avatar className="h-16 w-16 md:h-20 md:w-20 border-2 border-background relative overflow-hidden">
             <AvatarImage 
