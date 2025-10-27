@@ -6,10 +6,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Upload, Music, Hash, X, Play, Pause, Volume2, VolumeX } from "lucide-react";
+import { Upload, Music, Hash, X, Play, Pause, Volume2, VolumeX, Loader2 } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
+import { compressVideo } from "@/lib/videoCompression";
 import Header from "@/components/Header";
 import BottomNavigation from "@/components/BottomNavigation";
 
@@ -27,6 +28,8 @@ export default function UploadPage() {
   const [allowDuet, setAllowDuet] = useState(true);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMuted, setIsMuted] = useState(true);
+  const [isCompressing, setIsCompressing] = useState(false);
+  const [compressionProgress, setCompressionProgress] = useState(0);
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -52,19 +55,70 @@ export default function UploadPage() {
   });
 
   const uploadMutation = useMutation({
-    mutationFn: async (formData: FormData) => {
-      const response = await fetch('/api/videos', {
-        method: 'POST',
-        body: formData,
-      });
-      
-      if (!response.ok) {
-        throw new Error('Upload failed');
+    mutationFn: async (data: { file: File; metadata: any }) => {
+      try {
+        // Step 1: Get upload signature
+        const signatureResponse = await fetch("/api/cloudinary/signature", {
+          method: "POST",
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ folder: 'reelish/videos' }),
+          credentials: "include"
+        });
+        
+        if (!signatureResponse.ok) {
+          throw new Error('Failed to get upload signature');
+        }
+        
+        const { signature, timestamp, cloudName, apiKey, folder } = await signatureResponse.json();
+        
+        // Step 2: Upload directly to Cloudinary
+        const cloudinaryFormData = new FormData();
+        cloudinaryFormData.append('file', data.file);
+        cloudinaryFormData.append('signature', signature);
+        cloudinaryFormData.append('timestamp', timestamp.toString());
+        cloudinaryFormData.append('api_key', apiKey);
+        cloudinaryFormData.append('folder', folder);
+        cloudinaryFormData.append('resource_type', 'video');
+        
+        const uploadResponse = await fetch(
+          `https://api.cloudinary.com/v1_1/${cloudName}/video/upload`,
+          { method: 'POST', body: cloudinaryFormData }
+        );
+        
+        if (!uploadResponse.ok) {
+          throw new Error('Cloudinary upload failed');
+        }
+        
+        const cloudinaryResult = await uploadResponse.json();
+        
+        // Step 3: Create video record
+        const videoData = {
+          ...data.metadata,
+          videoUrl: cloudinaryResult.secure_url,
+          thumbnailUrl: cloudinaryResult.eager?.[0]?.secure_url || null,
+          fileSize: cloudinaryResult.bytes,
+          format: cloudinaryResult.format,
+          duration: Math.round(cloudinaryResult.duration || 0)
+        };
+        
+        const response = await fetch("/api/videos/from-url", {
+          method: "POST",
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(videoData),
+          credentials: "include"
+        });
+        
+        if (!response.ok) {
+          throw new Error('Failed to create video record');
+        }
+        
+        return response.json();
+      } catch (error) {
+        console.error('Upload error:', error);
+        throw error;
       }
-      
-      return response.json();
     },
-    onSuccess: (data) => {
+    onSuccess: () => {
       toast({
         title: "Video uploaded successfully! 🎉",
         description: "Your video is now live on Reelish!",
@@ -84,15 +138,14 @@ export default function UploadPage() {
   const handleVideoSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
-      if (file.size > 100 * 1024 * 1024) {
-        toast({
-          title: "File too large",
-          description: "Please select a video under 100MB",
-          variant: "destructive",
-        });
-        return;
-      }
       setVideoFile(file);
+      const sizeMB = file.size / (1024 * 1024);
+      if (sizeMB > 45) {
+        toast({
+          title: "Large file detected",
+          description: `${sizeMB.toFixed(1)}MB file will be compressed before upload`,
+        });
+      }
     }
   };
 
@@ -132,7 +185,7 @@ export default function UploadPage() {
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!videoFile) {
@@ -153,20 +206,63 @@ export default function UploadPage() {
       return;
     }
 
-    const formData = new FormData();
-    formData.append('video', videoFile);
-    if (thumbnailFile) {
-      formData.append('thumbnail', thumbnailFile);
-    }
-    formData.append('title', title);
-    formData.append('description', description);
-    formData.append('musicName', musicName);
-    formData.append('hashtags', JSON.stringify(hashtags));
-    formData.append('isPrivate', isPrivate.toString());
-    formData.append('allowComments', allowComments.toString());
-    formData.append('allowDuet', allowDuet.toString());
+    // Compress video if needed
+    setIsCompressing(true);
+    setCompressionProgress(0);
+    
+    try {
+      toast({
+        title: "Preparing video...",
+        description: "Compressing video for optimal upload",
+      });
+      
+      const compressedFile = await compressVideo(videoFile, {
+        maxSizeMB: 45,
+        maxWidthOrHeight: 1080,
+        quality: 0.7,
+        onProgress: (progress) => setCompressionProgress(progress)
+      });
+      
+      const metadata = {
+        title: title.trim(),
+        description: description.trim(),
+        musicName: musicName.trim(),
+        hashtags: hashtags,
+        mentions: [],
+        isPrivate,
+        allowComments,
+        allowDuet
+      };
 
-    uploadMutation.mutate(formData);
+      uploadMutation.mutate({
+        file: compressedFile,
+        metadata
+      });
+    } catch (error) {
+      console.error('Compression error:', error);
+      toast({
+        title: "Compression failed",
+        description: "Using original file",
+      });
+      
+      const metadata = {
+        title: title.trim(),
+        description: description.trim(),
+        musicName: musicName.trim(),
+        hashtags: hashtags,
+        mentions: [],
+        isPrivate,
+        allowComments,
+        allowDuet
+      };
+
+      uploadMutation.mutate({
+        file: videoFile,
+        metadata
+      });
+    } finally {
+      setIsCompressing(false);
+    }
   };
 
   return (
@@ -260,6 +356,11 @@ export default function UploadPage() {
                     <div className="text-sm text-gray-400">
                       <p><strong>File:</strong> {videoFile.name}</p>
                       <p><strong>Size:</strong> {(videoFile.size / (1024 * 1024)).toFixed(2)} MB</p>
+                      {videoFile.size > 45 * 1024 * 1024 && (
+                        <p className="text-yellow-500 mt-1">
+                          ⚡ Will be compressed to ~40MB
+                        </p>
+                      )}
                     </div>
                   )}
 
@@ -449,11 +550,16 @@ export default function UploadPage() {
               <Button
                 type="submit"
                 className="bg-pink-600 hover:bg-pink-700 px-8"
-                disabled={!videoFile || !title.trim() || uploadMutation.isPending}
+                disabled={!videoFile || !title.trim() || uploadMutation.isPending || isCompressing}
               >
-                {uploadMutation.isPending ? (
+                {isCompressing ? (
                   <>
-                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2" />
+                    <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                    Compressing... {compressionProgress}%
+                  </>
+                ) : uploadMutation.isPending ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin mr-2" />
                     Uploading...
                   </>
                 ) : (
