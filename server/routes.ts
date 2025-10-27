@@ -395,6 +395,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Video Routes
   
+  // Generate Cloudinary upload signature for direct uploads
+  app.post('/api/cloudinary/signature', requireAuth, async (req, res) => {
+    try {
+      const timestamp = Math.round((new Date()).getTime() / 1000);
+      const { folder = 'reelish/videos' } = req.body;
+      
+      // Generate signature for Cloudinary upload
+      const params = {
+        timestamp: timestamp,
+        folder: folder,
+        resource_type: 'video'
+      };
+      
+      const signature = cloudinary.utils.api_sign_request(
+        params,
+        process.env.CLOUDINARY_API_SECRET!
+      );
+      
+      res.json({
+        signature,
+        timestamp,
+        cloudName: process.env.CLOUDINARY_CLOUD_NAME,
+        apiKey: process.env.CLOUDINARY_API_KEY,
+        folder
+      });
+    } catch (error) {
+      console.error('Error generating Cloudinary signature:', error);
+      res.status(500).json({ message: 'Failed to generate upload signature' });
+    }
+  });
+  
   // Update video privacy status
   app.patch('/api/videos/:id/privacy', requireAuth, async (req, res) => {
     try {
@@ -540,6 +571,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Create video from Cloudinary URLs (for direct uploads)
+  app.post('/api/videos/from-url', requireAuth, async (req, res) => {
+    try {
+      const { videoUrl, thumbnailUrl, title, description, isPrivate, allowComments, duration, hashtags, mentions, musicName, fileSize, format } = req.body;
+      
+      if (!videoUrl) {
+        return res.status(400).json({ message: "Video URL is required" });
+      }
+      
+      const videoData = {
+        userId: req.user!.id,
+        title,
+        description: description || '',
+        isPrivate: isPrivate === true || isPrivate === 'true',
+        allowComments: allowComments !== false && allowComments !== 'false',
+        videoUrl,
+        thumbnailUrl: thumbnailUrl || null,
+        fileSize: fileSize || 0,
+        format: format || null,
+        duration: parseInt(duration || '0'),
+        hashtags: hashtags || [],
+        mentions: mentions || [],
+        musicName: musicName || null
+      };
+      
+      console.log('Creating video from URL:', JSON.stringify(videoData, null, 2));
+      
+      const video = await dbStorage.createVideo(videoData);
+      res.status(201).json({ 
+        message: "Video uploaded successfully!", 
+        video 
+      });
+    } catch (error) {
+      console.error("Video creation from URL error:", error);
+      res.status(500).json({ message: "Failed to create video" });
+    }
+  });
+  
   app.post('/api/videos', requireAuth, upload.fields([
     { name: 'video', maxCount: 1 },
     { name: 'thumbnail', maxCount: 1 }

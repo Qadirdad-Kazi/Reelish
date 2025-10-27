@@ -27,41 +27,81 @@ export default function UploadModal({ isOpen, onClose, currentUserId, defaultHas
   const queryClient = useQueryClient();
 
   const uploadMutation = useMutation({
-    mutationFn: async (formData: FormData) => {
-      console.log('Starting video upload with authentication...');
-      
-      // Log session cookie for debugging (without exposing sensitive data)
-      console.log('Cookie exists:', document.cookie.includes('connect.sid'));
+    mutationFn: async (data: { file: File; metadata: any }) => {
+      console.log('Starting direct Cloudinary upload...');
       
       try {
-        const response = await fetch("/api/videos", {
+        // Step 1: Get upload signature from backend
+        const signatureResponse = await fetch("/api/cloudinary/signature", {
           method: "POST",
-          body: formData,
-          credentials: "include", // This is crucial for sending cookies/session data
           headers: {
-            // Don't set Content-Type with FormData as the browser will set it with the boundary
-          }
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ folder: 'reelish/videos' }),
+          credentials: "include"
         });
         
-        // Log response details for debugging
-        console.log('Upload response status:', response.status);
-        console.log('Upload response headers:', [...response.headers.entries()]);
+        if (!signatureResponse.ok) {
+          throw new Error('Failed to get upload signature');
+        }
+        
+        const { signature, timestamp, cloudName, apiKey, folder } = await signatureResponse.json();
+        
+        // Step 2: Upload directly to Cloudinary
+        const cloudinaryFormData = new FormData();
+        cloudinaryFormData.append('file', data.file);
+        cloudinaryFormData.append('signature', signature);
+        cloudinaryFormData.append('timestamp', timestamp.toString());
+        cloudinaryFormData.append('api_key', apiKey);
+        cloudinaryFormData.append('folder', folder);
+        cloudinaryFormData.append('resource_type', 'video');
+        
+        console.log('Uploading to Cloudinary...');
+        const uploadResponse = await fetch(
+          `https://api.cloudinary.com/v1_1/${cloudName}/video/upload`,
+          {
+            method: 'POST',
+            body: cloudinaryFormData
+          }
+        );
+        
+        if (!uploadResponse.ok) {
+          const errorData = await uploadResponse.json();
+          console.error('Cloudinary upload error:', errorData);
+          throw new Error(errorData.error?.message || 'Cloudinary upload failed');
+        }
+        
+        const cloudinaryResult = await uploadResponse.json();
+        console.log('Cloudinary upload successful:', cloudinaryResult);
+        
+        // Step 3: Create video record in database
+        const videoData = {
+          ...data.metadata,
+          videoUrl: cloudinaryResult.secure_url,
+          thumbnailUrl: cloudinaryResult.eager?.[0]?.secure_url || null,
+          fileSize: cloudinaryResult.bytes,
+          format: cloudinaryResult.format,
+          duration: Math.round(cloudinaryResult.duration || 0)
+        };
+        
+        const response = await fetch("/api/videos/from-url", {
+          method: "POST",
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(videoData),
+          credentials: "include"
+        });
         
         if (!response.ok) {
-          let errorMessage = `Upload failed with status ${response.status}`;
-          try {
-            const errorText = await response.text();
-            console.error('Upload error details:', errorText);
-            errorMessage = errorText || errorMessage;
-          } catch (parseError) {
-            console.error('Could not parse error response:', parseError);
-          }
-          throw new Error(errorMessage);
+          const errorText = await response.text();
+          console.error('Video creation error:', errorText);
+          throw new Error(errorText || 'Failed to create video record');
         }
         
         return response.json();
       } catch (error) {
-        console.error('Upload network error:', error);
+        console.error('Upload error:', error);
         throw error;
       }
     },
@@ -165,21 +205,23 @@ export default function UploadModal({ isOpen, onClose, currentUserId, defaultHas
       return;
     }
 
-    const formData = new FormData();
-    formData.append("video", selectedFile);
-    formData.append("userId", currentUserId.toString());
-    formData.append("title", title.trim());
-    formData.append("description", description.trim());
-    formData.append("isPrivate", (privacy !== "public").toString());
-    formData.append("musicName", musicName.trim());
-    
     const hashtags = extractHashtags(description);
-    formData.append("hashtags", JSON.stringify(hashtags));
     
-    // Mock duration - in a real app, this would be extracted from the video
-    formData.append("duration", "30");
+    const metadata = {
+      userId: currentUserId.toString(),
+      title: title.trim(),
+      description: description.trim(),
+      isPrivate: privacy !== "public",
+      musicName: musicName.trim(),
+      hashtags: hashtags,
+      mentions: [], // Extract mentions if needed
+      allowComments: true
+    };
 
-    uploadMutation.mutate(formData);
+    uploadMutation.mutate({
+      file: selectedFile,
+      metadata
+    });
   };
 
   return (
