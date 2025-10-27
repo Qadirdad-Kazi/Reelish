@@ -15,21 +15,21 @@ export async function compressVideo(
   options: CompressionOptions = {}
 ): Promise<File> {
   const {
-    maxSizeMB = 50, // Target max size in MB
-    maxWidthOrHeight = 1280, // Max dimension (720p-ish)
-    quality = 0.8, // Video quality (0.0 - 1.0)
+    maxSizeMB = 45, // Target max size in MB (lowered for safety margin)
+    maxWidthOrHeight = 1080, // Max dimension (reduced to 1080p)
+    quality = 0.7, // Video quality reduced to 0.7 for better compression
     onProgress = () => {}
   } = options;
 
   // If file is already small enough, return it
   const fileSizeMB = file.size / (1024 * 1024);
   if (fileSizeMB <= maxSizeMB) {
-    console.log(`File size ${fileSizeMB.toFixed(2)}MB is within limit, no compression needed`);
+    console.log(`✅ File size ${fileSizeMB.toFixed(2)}MB is within limit, no compression needed`);
     onProgress(100);
     return file;
   }
 
-  console.log(`Compressing video from ${fileSizeMB.toFixed(2)}MB...`);
+  console.log(`🗜️ Compressing video from ${fileSizeMB.toFixed(2)}MB...`);
   onProgress(10);
 
   return new Promise((resolve, reject) => {
@@ -97,7 +97,7 @@ export async function compressVideo(
 
           const recorder = new MediaRecorder(stream, {
             mimeType,
-            videoBitsPerSecond: 2500000 // 2.5 Mbps for good quality
+            videoBitsPerSecond: 1500000 // Reduced to 1.5 Mbps for better compression
           });
 
           recorder.ondataavailable = (e) => {

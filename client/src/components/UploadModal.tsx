@@ -31,10 +31,14 @@ export default function UploadModal({ isOpen, onClose, currentUserId, defaultHas
 
   const uploadMutation = useMutation({
     mutationFn: async (data: { file: File; metadata: any }) => {
-      console.log('Starting direct Cloudinary upload...');
+      const fileSizeMB = data.file.size / (1024 * 1024);
+      console.log('🚀 Starting direct Cloudinary upload...');
+      console.log(`📦 File size: ${fileSizeMB.toFixed(2)}MB`);
+      console.log(`📁 File type: ${data.file.type}`);
       
       try {
         // Step 1: Get upload signature from backend
+        console.log('📝 Step 1: Requesting upload signature from /api/cloudinary/signature');
         const signatureResponse = await fetch("/api/cloudinary/signature", {
           method: "POST",
           headers: {
@@ -44,13 +48,19 @@ export default function UploadModal({ isOpen, onClose, currentUserId, defaultHas
           credentials: "include"
         });
         
+        console.log(`📝 Signature response status: ${signatureResponse.status}`);
+        
         if (!signatureResponse.ok) {
-          throw new Error('Failed to get upload signature');
+          const errorText = await signatureResponse.text();
+          console.error(`❌ Signature request failed: ${signatureResponse.status} - ${errorText}`);
+          throw new Error(`Failed to get upload signature: ${signatureResponse.status}`);
         }
         
         const { signature, timestamp, cloudName, apiKey, folder } = await signatureResponse.json();
+        console.log(`✅ Got signature! Cloud: ${cloudName}`);
         
         // Step 2: Upload directly to Cloudinary
+        console.log('☁️  Step 2: Uploading directly to Cloudinary...');
         const cloudinaryFormData = new FormData();
         cloudinaryFormData.append('file', data.file);
         cloudinaryFormData.append('signature', signature);
@@ -59,25 +69,29 @@ export default function UploadModal({ isOpen, onClose, currentUserId, defaultHas
         cloudinaryFormData.append('folder', folder);
         cloudinaryFormData.append('resource_type', 'video');
         
-        console.log('Uploading to Cloudinary...');
-        const uploadResponse = await fetch(
-          `https://api.cloudinary.com/v1_1/${cloudName}/video/upload`,
-          {
-            method: 'POST',
-            body: cloudinaryFormData
-          }
-        );
+        const cloudinaryUrl = `https://api.cloudinary.com/v1_1/${cloudName}/video/upload`;
+        console.log(`☁️  Uploading to: ${cloudinaryUrl}`);
+        console.log(`☁️  File size being uploaded: ${fileSizeMB.toFixed(2)}MB`);
+        
+        const uploadResponse = await fetch(cloudinaryUrl, {
+          method: 'POST',
+          body: cloudinaryFormData
+        });
+        
+        console.log(`☁️  Cloudinary response status: ${uploadResponse.status}`);
         
         if (!uploadResponse.ok) {
-          const errorData = await uploadResponse.json();
-          console.error('Cloudinary upload error:', errorData);
-          throw new Error(errorData.error?.message || 'Cloudinary upload failed');
+          const errorText = await uploadResponse.text();
+          console.error(`❌ Cloudinary upload error: ${uploadResponse.status} - ${errorText}`);
+          throw new Error(`Cloudinary upload failed: ${uploadResponse.status}`);
         }
         
         const cloudinaryResult = await uploadResponse.json();
-        console.log('Cloudinary upload successful:', cloudinaryResult);
+        console.log('✅ Cloudinary upload successful!');
+        console.log(`📹 Video URL: ${cloudinaryResult.secure_url}`);
         
         // Step 3: Create video record in database
+        console.log('💾 Step 3: Creating video record in database...');
         const videoData = {
           ...data.metadata,
           videoUrl: cloudinaryResult.secure_url,
@@ -87,6 +101,7 @@ export default function UploadModal({ isOpen, onClose, currentUserId, defaultHas
           duration: Math.round(cloudinaryResult.duration || 0)
         };
         
+        console.log('💾 Calling /api/videos/from-url with video metadata');
         const response = await fetch("/api/videos/from-url", {
           method: "POST",
           headers: {
@@ -96,13 +111,17 @@ export default function UploadModal({ isOpen, onClose, currentUserId, defaultHas
           credentials: "include"
         });
         
+        console.log(`💾 Video creation response status: ${response.status}`);
+        
         if (!response.ok) {
-          const errorText = await response.text();
-          console.error('Video creation error:', errorText);
-          throw new Error(errorText || 'Failed to create video record');
+            const errorText = await response.text();
+          console.error(`❌ Video creation error: ${response.status} - ${errorText}`);
+          throw new Error(`Failed to create video record: ${response.status}`);
         }
         
-        return response.json();
+        const result = await response.json();
+        console.log('✅ Video record created successfully!');
+        return result;
       } catch (error) {
         console.error('Upload error:', error);
         throw error;
@@ -222,11 +241,12 @@ export default function UploadModal({ isOpen, onClose, currentUserId, defaultHas
       });
       
       const compressedFile = await compressVideo(selectedFile, {
-        maxSizeMB: 50, // Target 50MB max
-        maxWidthOrHeight: 1280, // 720p quality
-        quality: 0.8,
+        maxSizeMB: 45, // Target 45MB max (with safety margin)
+        maxWidthOrHeight: 1080, // 1080p quality
+        quality: 0.7, // More aggressive compression
         onProgress: (progress) => {
           setCompressionProgress(progress);
+          console.log(`📊 Compression progress: ${progress}%`);
         }
       });
       
@@ -416,9 +436,9 @@ export default function UploadModal({ isOpen, onClose, currentUserId, defaultHas
           {selectedFile && (
             <div className="text-xs text-center text-gray-400">
               File size: {(selectedFile.size / (1024 * 1024)).toFixed(2)} MB
-              {selectedFile.size > 50 * 1024 * 1024 && (
+              {selectedFile.size > 45 * 1024 * 1024 && (
                 <span className="block text-yellow-500 mt-1">
-                  ⚡ Large file - will be compressed before upload
+                  ⚡ Large file - will be compressed to ~40MB before upload
                 </span>
               )}
             </div>
