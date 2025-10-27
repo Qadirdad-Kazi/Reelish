@@ -6,9 +6,10 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { CloudUpload, X } from "lucide-react";
+import { CloudUpload, X, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { extractHashtags } from "@/lib/utils";
+import { compressVideo, getVideoDuration } from "@/lib/videoCompression";
 
 interface UploadModalProps {
   isOpen: boolean;
@@ -23,6 +24,8 @@ export default function UploadModal({ isOpen, onClose, currentUserId, defaultHas
   const [description, setDescription] = useState(defaultHashtag ? `#${defaultHashtag} ` : "");
   const [privacy, setPrivacy] = useState("public");
   const [musicName, setMusicName] = useState("");
+  const [isCompressing, setIsCompressing] = useState(false);
+  const [compressionProgress, setCompressionProgress] = useState(0);
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -205,23 +208,75 @@ export default function UploadModal({ isOpen, onClose, currentUserId, defaultHas
       return;
     }
 
-    const hashtags = extractHashtags(description);
+    // Compress video before uploading
+    setIsCompressing(true);
+    setCompressionProgress(0);
     
-    const metadata = {
-      userId: currentUserId.toString(),
-      title: title.trim(),
-      description: description.trim(),
-      isPrivate: privacy !== "public",
-      musicName: musicName.trim(),
-      hashtags: hashtags,
-      mentions: [], // Extract mentions if needed
-      allowComments: true
-    };
+    const fileSizeMB = selectedFile.size / (1024 * 1024);
+    console.log(`Original file size: ${fileSizeMB.toFixed(2)}MB`);
+    
+    try {
+      toast({
+        title: "Preparing video...",
+        description: "Compressing video for optimal upload",
+      });
+      
+      const compressedFile = await compressVideo(selectedFile, {
+        maxSizeMB: 50, // Target 50MB max
+        maxWidthOrHeight: 1280, // 720p quality
+        quality: 0.8,
+        onProgress: (progress) => {
+          setCompressionProgress(progress);
+        }
+      });
+      
+      const compressedSizeMB = compressedFile.size / (1024 * 1024);
+      console.log(`Compressed file size: ${compressedSizeMB.toFixed(2)}MB`);
+      
+      const hashtags = extractHashtags(description);
+      
+      const metadata = {
+        userId: currentUserId.toString(),
+        title: title.trim(),
+        description: description.trim(),
+        isPrivate: privacy !== "public",
+        musicName: musicName.trim(),
+        hashtags: hashtags,
+        mentions: [], // Extract mentions if needed
+        allowComments: true
+      };
 
-    uploadMutation.mutate({
-      file: selectedFile,
-      metadata
-    });
+      uploadMutation.mutate({
+        file: compressedFile,
+        metadata
+      });
+    } catch (error) {
+      console.error('Compression error:', error);
+      toast({
+        title: "Compression failed",
+        description: "Using original file for upload",
+      });
+      
+      // Use original file if compression fails
+      const hashtags = extractHashtags(description);
+      const metadata = {
+        userId: currentUserId.toString(),
+        title: title.trim(),
+        description: description.trim(),
+        isPrivate: privacy !== "public",
+        musicName: musicName.trim(),
+        hashtags: hashtags,
+        mentions: [],
+        allowComments: true
+      };
+
+      uploadMutation.mutate({
+        file: selectedFile,
+        metadata
+      });
+    } finally {
+      setIsCompressing(false);
+    }
   };
 
   return (
@@ -339,11 +394,35 @@ export default function UploadModal({ isOpen, onClose, currentUserId, defaultHas
           {/* Upload Button */}
           <Button
             onClick={handleUpload}
-            disabled={!selectedFile || !title.trim() || uploadMutation.isPending}
+            disabled={!selectedFile || !title.trim() || uploadMutation.isPending || isCompressing}
             className="w-full bg-tiktok-pink hover:bg-tiktok-pink/80 text-black font-medium h-12"
           >
-            {uploadMutation.isPending ? "Uploading..." : "Post Video"}
+            {isCompressing ? (
+              <div className="flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span>Compressing... {compressionProgress}%</span>
+              </div>
+            ) : uploadMutation.isPending ? (
+              <div className="flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span>Uploading...</span>
+              </div>
+            ) : (
+              "Post Video"
+            )}
           </Button>
+          
+          {/* File Size Info */}
+          {selectedFile && (
+            <div className="text-xs text-center text-gray-400">
+              File size: {(selectedFile.size / (1024 * 1024)).toFixed(2)} MB
+              {selectedFile.size > 50 * 1024 * 1024 && (
+                <span className="block text-yellow-500 mt-1">
+                  ⚡ Large file - will be compressed before upload
+                </span>
+              )}
+            </div>
+          )}
         </div>
       </DialogContent>
     </Dialog>
