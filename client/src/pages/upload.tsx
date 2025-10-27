@@ -74,11 +74,10 @@ export default function UploadPage() {
         // Step 2: Upload directly to Cloudinary
         const cloudinaryFormData = new FormData();
         cloudinaryFormData.append('file', data.file);
-        cloudinaryFormData.append('signature', signature);
         cloudinaryFormData.append('timestamp', timestamp.toString());
-        cloudinaryFormData.append('api_key', apiKey);
         cloudinaryFormData.append('folder', folder);
-        cloudinaryFormData.append('resource_type', 'video');
+        cloudinaryFormData.append('signature', signature);
+        cloudinaryFormData.append('api_key', apiKey);
         
         const uploadResponse = await fetch(
           `https://api.cloudinary.com/v1_1/${cloudName}/video/upload`,

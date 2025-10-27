@@ -401,17 +401,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const timestamp = Math.round((new Date()).getTime() / 1000);
       const { folder = 'reelish/videos' } = req.body;
       
-      // Generate signature for Cloudinary upload
-      const params = {
+      // Parameters to sign (must match exactly what client sends)
+      // Note: resource_type is NOT included in signature for upload endpoint
+      const paramsToSign = {
         timestamp: timestamp,
-        folder: folder,
-        resource_type: 'video'
+        folder: folder
       };
       
+      // Generate signature
       const signature = cloudinary.utils.api_sign_request(
-        params,
+        paramsToSign,
         process.env.CLOUDINARY_API_SECRET!
       );
+      
+      console.log('Generated signature for:', paramsToSign);
+      console.log('Signature:', signature);
       
       res.json({
         signature,

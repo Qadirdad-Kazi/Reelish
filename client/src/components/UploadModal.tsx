@@ -61,13 +61,22 @@ export default function UploadModal({ isOpen, onClose, currentUserId, defaultHas
         
         // Step 2: Upload directly to Cloudinary
         console.log('☁️  Step 2: Uploading directly to Cloudinary...');
+        
+        // Debug: Log what we're about to send
+        console.log('📤 Upload parameters:', {
+          timestamp,
+          folder,
+          api_key: apiKey,
+          signature: signature.substring(0, 20) + '...',
+          cloud_name: cloudName
+        });
+        
         const cloudinaryFormData = new FormData();
         cloudinaryFormData.append('file', data.file);
-        cloudinaryFormData.append('signature', signature);
         cloudinaryFormData.append('timestamp', timestamp.toString());
-        cloudinaryFormData.append('api_key', apiKey);
         cloudinaryFormData.append('folder', folder);
-        cloudinaryFormData.append('resource_type', 'video');
+        cloudinaryFormData.append('signature', signature);
+        cloudinaryFormData.append('api_key', apiKey);
         
         const cloudinaryUrl = `https://api.cloudinary.com/v1_1/${cloudName}/video/upload`;
         console.log(`☁️  Uploading to: ${cloudinaryUrl}`);
@@ -81,9 +90,17 @@ export default function UploadModal({ isOpen, onClose, currentUserId, defaultHas
         console.log(`☁️  Cloudinary response status: ${uploadResponse.status}`);
         
         if (!uploadResponse.ok) {
-          const errorText = await uploadResponse.text();
-          console.error(`❌ Cloudinary upload error: ${uploadResponse.status} - ${errorText}`);
-          throw new Error(`Cloudinary upload failed: ${uploadResponse.status}`);
+          let errorDetails = 'Unknown error';
+          try {
+            const errorData = await uploadResponse.json();
+            errorDetails = JSON.stringify(errorData);
+            console.error(`❌ Cloudinary error response:`, errorData);
+          } catch (e) {
+            const errorText = await uploadResponse.text();
+            errorDetails = errorText;
+            console.error(`❌ Cloudinary error text:`, errorText);
+          }
+          throw new Error(`Cloudinary upload failed (${uploadResponse.status}): ${errorDetails}`);
         }
         
         const cloudinaryResult = await uploadResponse.json();
