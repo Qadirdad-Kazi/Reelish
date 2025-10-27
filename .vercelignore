@@ -1,19 +1,20 @@
 # Exclude development and build artifacts
-node_modules
 .git
 .gitignore
 *.log
-*.md
-README.md
 
 # Exclude client files (deployed separately to Netlify)
 client/
 
-# Exclude server files (not needed for serverless function)
+# Exclude server dev files
 server/node_modules
 server/dist
 server/uploads
 server/scripts
+server/*.test.ts
+server/*.test.js
+server/*.spec.ts
+server/*.spec.js
 
 # Exclude uploads directory
 uploads/
@@ -21,7 +22,13 @@ uploads/
 # Exclude other non-essential files
 .vscode
 .idea
-*.test.ts
-*.test.js
-*.spec.ts
-*.spec.js
+*.md
+README.md
+LICENSE
+.DS_Store
+.env.local
+.env.development
+.env.test
+
+# Exclude root node_modules (we install in api folder)
+node_modules/
