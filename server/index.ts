@@ -2,7 +2,8 @@ import 'dotenv/config';
 import express, { type Request, Response, NextFunction } from "express";
 import cors from "cors";
 import { registerRoutes } from "./routes.js";
-import { setupVite, serveStatic, log } from "./vite.js";
+// Vite integration removed for backend deployment readiness
+const log = (...args: any[]) => console.log(...args);
 
 const app = express();
 
@@ -86,16 +87,9 @@ app.use((req, res, next) => {
     console.error('Error in request:', err);
   });
 
-  // importantly only setup vite in development and after
   // IMPORTANT: Register API routes BEFORE any catch-all routes
   // This ensures API requests are handled properly and don't return HTML
-  
-  // Now set up the client-side routes
-  if (app.get("env") === "development") {
-    await setupVite(app, server);
-  } else {
-    serveStatic(app);
-  }
+  // Vite integration removed for backend deployment readiness
 
   // Serve the app on port 3000
   // this serves both the API and the client.
