@@ -14,6 +14,6 @@
       "@/*": ["./*"]
     }
   },
-  "include": ["**/*.ts", "types.d.ts"],
+  "include": ["**/*.ts", "global.d.ts"],
   "exclude": ["node_modules", "dist"]
 }
