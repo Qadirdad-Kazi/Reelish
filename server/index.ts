@@ -58,6 +58,10 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+    // Add API health check endpoint
+    app.get('/api/health', (_req, res) => {
+      res.json({ status: 'ok', message: 'API is healthy' });
+    });
   // Add root route for health check or landing
   app.get('/', (_req, res) => {
     res.send('Reelish backend is running!');
