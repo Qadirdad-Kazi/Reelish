@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Heart, MessageCircle, Share, Music, Play, VolumeX, Volume2, Bookmark, MoreVertical, Eye, EyeOff } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -36,26 +36,30 @@ interface VideoPlayerProps {
 }
 
 export default function VideoPlayer({ video, isActive = false }: VideoPlayerProps) {
+  // State management
   const [isPlaying, setIsPlaying] = useState(false);
-  const [isMuted, setIsMuted] = useState(false); // Set to false for sound on by default
+  const [isMuted, setIsMuted] = useState(true); // Start with muted to prevent autoplay issues
   const [showComments, setShowComments] = useState(false);
   const [isLiked, setIsLiked] = useState(video.isLiked || false);
+  const [likesCount, setLikesCount] = useState<number>(video.likesCount || 0);
   const [isFavorite, setIsFavorite] = useState(video.isFavorite || false);
   const [isFollowing, setIsFollowing] = useState(video.isFollowing || false);
   const [videoError, setVideoError] = useState(false);
   const [isPrivate, setIsPrivate] = useState(video.isPrivate || false);
+  const [showPlayButton, setShowPlayButton] = useState(true); // Show play button overlay by default
   const videoRef = useRef<HTMLVideoElement>(null);
   const { user } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
+  // Handle video playback errors and autoplay policies
   useEffect(() => {
     const videoElement = videoRef.current;
     if (!videoElement) return;
 
-    // Add error event handler
     const handleError = (e: Event) => {
-      console.log(`Error playing video ID ${video.id}:`, (e.target as HTMLMediaElement).error);
+      const error = (e.target as HTMLMediaElement).error;
+      console.error(`Error playing video ID ${video.id}:`, error);
       
       // Log the attempted video URL for debugging
       const videoSrc = video.videoUrl.startsWith('/uploads/') 
@@ -63,87 +67,163 @@ export default function VideoPlayer({ video, isActive = false }: VideoPlayerProp
         : video.videoUrl;
       console.log(`Attempted to load video from: ${videoSrc}`);
       
-      // Check if the user is authenticated by making a quick auth check
-      fetch('/api/auth/me')
-        .then(response => {
-          if (!response.ok && response.status === 401) {
-            console.log('Authentication error: User is not logged in');
-            // If we get a 401, we need to redirect to login
-            window.location.href = '/login';
-          }
-        })
-        .catch(err => console.error('Auth check error:', err));
+      // Handle specific error codes
+      if (error) {
+        switch(error.code) {
+          case MediaError.MEDIA_ERR_ABORTED:
+            console.log('Video playback was aborted');
+            break;
+          case MediaError.MEDIA_ERR_NETWORK:
+            console.error('A network error occurred while fetching the video');
+            break;
+          case MediaError.MEDIA_ERR_DECODE:
+            console.error('Error decoding the video');
+            break;
+          case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
+            console.error('Video format not supported');
+            break;
+          default:
+            console.error('An unknown error occurred');
+        }
+      }
       
       setVideoError(true);
       setIsPlaying(false);
+      setShowPlayButton(true); // Show play button on error
     };
 
-    videoElement.addEventListener('error', handleError);
+    const handlePlay = () => {
+      setIsPlaying(true);
+      setShowPlayButton(false);
+      setVideoError(false);
+    };
 
-    // Force reload the video source when becoming active
-    if (isActive && !videoError) {
-      // Set the current time to 0 to start from the beginning
-      videoElement.currentTime = 0;
-      
-      // Add a small delay before playing to ensure the video has loaded
-      const playPromise = setTimeout(() => {
-        videoElement.play()
-          .then(() => {
-            console.log(`Video playing: ID ${video.id}`);
-            setIsPlaying(true);
-          })
-          .catch((err) => {
-            console.error(`Error playing video ID ${video.id}:`, err);
-            // Try one more time after a short delay
-            setTimeout(() => {
-              videoElement.play().catch(() => {});
-            }, 500);
-          });
-      }, 100);
-      
-      return () => clearTimeout(playPromise);
-    } else {
-      videoElement.pause();
+    const handlePause = () => {
       setIsPlaying(false);
-    }
+      if (videoElement.paused) {
+        setShowPlayButton(true);
+      }
+    };
 
+    const handleUserInteraction = () => {
+      if (isMuted) {
+        videoElement.muted = false;
+        setIsMuted(false);
+      }
+      
+      if (videoElement.paused) {
+        const playPromise = videoElement.play();
+        if (playPromise !== undefined) {
+          playPromise.catch(error => {
+            console.log('Autoplay was prevented:', error);
+            setShowPlayButton(true);
+          });
+        }
+      }
+      
+      // Remove this event listener after first interaction
+      document.removeEventListener('click', handleUserInteraction);
+      document.removeEventListener('touchstart', handleUserInteraction);
+    };
+
+    // Add event listeners
+    videoElement.addEventListener('error', handleError);
+    videoElement.addEventListener('play', handlePlay);
+    videoElement.addEventListener('pause', handlePause);
+    videoElement.addEventListener('ended', handlePause);
+    document.addEventListener('click', handleUserInteraction);
+    document.addEventListener('touchstart', handleUserInteraction);
+
+    // Set up video source and handle autoplay
+    const setupVideo = async () => {
+      if (isActive && !videoError) {
+        videoElement.currentTime = 0;
+        videoElement.muted = true; // Start with muted to allow autoplay
+        
+        try {
+          await videoElement.play();
+          console.log(`Video playing: ID ${video.id}`);
+          setIsPlaying(true);
+          setShowPlayButton(false);
+        } catch (error) {
+          console.error(`Error playing video ID ${video.id}:`, error);
+          setShowPlayButton(true);
+        }
+      }
+    };
+
+    setupVideo();
+
+    // Cleanup
     return () => {
       videoElement.removeEventListener('error', handleError);
+      videoElement.removeEventListener('play', handlePlay);
+      videoElement.removeEventListener('pause', handlePause);
+      videoElement.removeEventListener('ended', handlePause);
+      document.removeEventListener('click', handleUserInteraction);
+      document.removeEventListener('touchstart', handleUserInteraction);
+      
+      if (!videoElement.paused) {
+        videoElement.pause();
+        setIsPlaying(false);
+      }
     };
-  }, [isActive, video.id, videoError]);
+  }, [isActive, video.id, videoError, isMuted, video.videoUrl]);
 
-  const togglePlay = () => {
+  const togglePlay = useCallback(() => {
     const videoElement = videoRef.current;
     if (!videoElement) return;
 
-    if (isPlaying) {
+    if (videoElement.paused) {
+      // If video is muted, try to unmute it first
+      if (videoElement.muted) {
+        videoElement.muted = false;
+        setIsMuted(false);
+      }
+      
+      videoElement.play()
+        .then(() => {
+          setIsPlaying(true);
+          setShowPlayButton(false);
+        })
+        .catch((error: Error) => {
+          console.error('Error playing video:', error);
+          // If autoplay with sound fails, try with muted
+          if (error.name === 'NotAllowedError') {
+            videoElement.muted = true;
+            setIsMuted(true);
+            videoElement.play()
+              .then(() => {
+                setIsPlaying(true);
+                setShowPlayButton(false);
+              })
+              .catch((err: Error) => {
+                console.error('Error playing muted video:', err);
+                setShowPlayButton(true);
+              });
+          } else {
+            setShowPlayButton(true);
+          }
+        });
+    } else {
       videoElement.pause();
       setIsPlaying(false);
-    } else {
-      videoElement.play().then(() => setIsPlaying(true)).catch(() => {});
+      setShowPlayButton(true);
     }
-  };
+  }, [setIsMuted, setIsPlaying, setShowPlayButton]);
 
-  const toggleMute = () => {
+  const toggleMute = useCallback(() => {
     const videoElement = videoRef.current;
     if (!videoElement) return;
 
     videoElement.muted = !videoElement.muted;
     setIsMuted(videoElement.muted);
-  };
-
-  // State for likes count
-  const [likesCount, setLikesCount] = useState<number>(video.likesCount || 0);
+  }, []);
 
   // Like video functionality with proper authentication check
-  const likeVideo = async () => {
+  const likeVideo = useCallback(async () => {
     try {
-      // Check authentication first
-      const authResponse = await fetch('/api/auth/me', {
-        credentials: 'include'
-      });
-      
-      if (!authResponse.ok) {
+      if (!user) {
         toast({
           title: "Authentication required",
           description: "Please sign in to like videos",
@@ -155,31 +235,39 @@ export default function VideoPlayer({ video, isActive = false }: VideoPlayerProp
       // Toggle like state optimistically
       const newLikedState = !isLiked;
       setIsLiked(newLikedState);
-      setLikesCount((prev: number) => newLikedState ? prev + 1 : prev - 1);
+      setLikesCount(prev => newLikedState ? (prev || 0) + 1 : Math.max(0, (prev || 0) - 1));
       
-      // Make API call
-      const response = await fetch(`/api/videos/${video.id}/like`, {
-        method: newLikedState ? 'POST' : 'DELETE',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json'
+      try {
+        // Make API call to the correct endpoint
+        const response = await fetch(`/api/likes`, {
+          method: newLikedState ? 'POST' : 'DELETE',
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            videoId: video.id,
+            userId: user.id
+          })
+        });
+        
+        if (!response.ok) {
+          throw new Error('Failed to update like status');
         }
-      });
-      
-      if (!response.ok) {
+        
+        // Invalidate queries to refresh data
+        queryClient.invalidateQueries({ queryKey: ['video', video.id] });
+        queryClient.invalidateQueries({ queryKey: ['videos'] });
+      } catch (error) {
         // Revert on error
         setIsLiked(!newLikedState);
-        setLikesCount((prev: number) => !newLikedState ? prev + 1 : prev - 1);
+        setLikesCount(prev => !newLikedState ? (prev || 0) + 1 : Math.max(0, (prev || 0) - 1));
         
         toast({
           title: "Error",
-          description: "Failed to update like status",
+          description: error instanceof Error ? error.message : "Failed to update like status",
           variant: "destructive"
         });
-      } else {
-        // Invalidate queries
-        queryClient.invalidateQueries({ queryKey: ['video', video.id] });
-        queryClient.invalidateQueries({ queryKey: ['videos'] });
       }
     } catch (error) {
       console.error("Like error:", error);
@@ -189,7 +277,7 @@ export default function VideoPlayer({ video, isActive = false }: VideoPlayerProp
         variant: "destructive"
       });
     }
-  };
+  }, [user, isLiked, video.id, queryClient, toast]);
 
   const toggleFavorite = async () => {
     try {
@@ -483,13 +571,16 @@ export default function VideoPlayer({ video, isActive = false }: VideoPlayerProp
           <>
             <video
               ref={videoRef}
-              className="w-full h-full object-cover rounded-lg"
+              className="w-full h-full object-cover rounded-lg touch-manipulation"
               loop
               muted={isMuted}
               playsInline
+              disablePictureInPicture
+              disableRemotePlayback
+              preload="metadata"
               onClick={togglePlay}
-              preload="auto"
               poster={`https://picsum.photos/seed/${video.id}/400/600`}
+              onContextMenu={(e) => e.preventDefault()}
             >
               {/* Use the streaming endpoint for better video delivery */}
               <source 
@@ -503,15 +594,21 @@ export default function VideoPlayer({ video, isActive = false }: VideoPlayerProp
             </video>
             
             {/* Play/Pause Overlay */}
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              {!isPlaying && (
-                <Button
-                  size="lg"
-                  className="bg-white/20 hover:bg-white/30 text-white rounded-full pointer-events-auto"
-                  onClick={togglePlay}
-                >
-                  <Play className="w-8 h-8" />
-                </Button>
+            <div 
+              className="absolute inset-0 flex items-center justify-center cursor-pointer"
+              onClick={togglePlay}
+            >
+              {showPlayButton && (
+                <div className="bg-black/50 rounded-full p-4">
+                  <Play className="w-12 h-12 text-white" />
+                </div>
+              )}
+              {isPlaying && !showPlayButton && (
+                <div className="absolute inset-0 opacity-0 hover:opacity-100 transition-opacity flex items-center justify-center">
+                  <div className="bg-black/50 rounded-full p-4">
+                    <Play className="w-12 h-12 text-white" />
+                  </div>
+                </div>
               )}
             </div>
           </>
