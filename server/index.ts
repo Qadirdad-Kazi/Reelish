@@ -58,6 +58,11 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  // Add root route for health check or landing
+  app.get('/', (_req, res) => {
+    res.send('Reelish backend is running!');
+  });
+
   const server = await registerRoutes(app);
   
   // Increase timeout for large file uploads
