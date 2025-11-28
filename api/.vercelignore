@@ -1,4 +1,0 @@
-# Don't ignore anything in api folder - we need server files
-# This overrides the root .vercelignore for the api directory
-!../server/**
-
