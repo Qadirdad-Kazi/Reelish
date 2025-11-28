@@ -73,7 +73,7 @@ cloudinary.config({
 // Configure Cloudinary Storage for video/thumbnail uploads
 const cloudinaryStorage = new CloudinaryStorage({
   cloudinary: cloudinary,
-  params: async (req, file) => {
+  params: async (req: Express.Request, file: Express.Multer.File) => {
     // Determine folder and resource type based on file type
     const isVideo = file.mimetype.startsWith('video/');
     return {
@@ -102,7 +102,7 @@ const profileImageUpload = multer({
   limits: {
     fileSize: 5 * 1024 * 1024, // 5MB limit
   },
-  fileFilter: (req, file, cb) => {
+  fileFilter: (req: Express.Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
     if (file.mimetype.startsWith('image/')) {
       cb(null, true);
     } else {
